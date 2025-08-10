@@ -1,0 +1,7 @@
+{
+  "name": "endpoint-monitor",
+  "version": "1.0.0",
+  "scripts": {
+"start": "cd frontend && bun run build && bun run ../backend/index.ts"
+  }
+}

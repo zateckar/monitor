@@ -1,0 +1,347 @@
+import React, { useState, useEffect } from 'react';
+import { TextField, Button, Box, Typography, Collapse, IconButton, Select, MenuItem, InputLabel, FormControl, Checkbox, FormControlLabel } from '@mui/material';
+import { ExpandMore as ExpandMoreIcon } from '@mui/icons-material';
+import type { Endpoint, MonitorType } from '../types';
+
+interface EditEndpointFormProps {
+  endpoint: Endpoint;
+  onUpdate: (endpoint: Endpoint) => void;
+  onCancel: () => void;
+}
+
+const EditEndpointForm: React.FC<EditEndpointFormProps> = ({ endpoint, onUpdate, onCancel }) => {
+  const [name, setName] = useState('');
+  const [type, setType] = useState<MonitorType>('http');
+  const [url, setUrl] = useState('');
+  const [heartbeatInterval, setHeartbeatInterval] = useState(60);
+  const [retries, setRetries] = useState(3);
+  const [httpMethod, setHttpMethod] = useState('GET');
+  const [httpHeaders, setHttpHeaders] = useState('');
+  const [httpBody, setHttpBody] = useState('');
+  const [okHttpStatuses, setOkHttpStatuses] = useState('');
+  const [checkCertExpiry, setCheckCertExpiry] = useState(false);
+  const [certExpiryThreshold, setCertExpiryThreshold] = useState(30);
+  const [keywordSearch, setKeywordSearch] = useState('');
+  const [upsideDownMode, setUpsideDownMode] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [tcpPort, setTcpPort] = useState<number | undefined>();
+  const [kafkaTopic, setKafkaTopic] = useState<string | undefined>();
+  const [kafkaMessage, setKafkaMessage] = useState<string | undefined>();
+  const [kafkaConfig, setKafkaConfig] = useState<string | undefined>();
+  
+  // mTLS state
+  const [clientCertEnabled, setClientCertEnabled] = useState(false);
+  const [clientCertPublicKey, setClientCertPublicKey] = useState('');
+  const [clientCertPrivateKey, setClientCertPrivateKey] = useState('');
+  const [clientCertCa, setClientCertCa] = useState('');
+
+  useEffect(() => {
+    if (endpoint) {
+      setName(endpoint.name);
+      setType(endpoint.type);
+      setUrl(endpoint.url);
+      setHeartbeatInterval(endpoint.heartbeat_interval);
+      setRetries(endpoint.retries);
+      setHttpMethod(endpoint.http_method || 'GET');
+      setHttpHeaders(endpoint.http_headers || '');
+      setHttpBody(endpoint.http_body || '');
+      setOkHttpStatuses(endpoint.ok_http_statuses ? endpoint.ok_http_statuses.join(',') : '');
+      setCheckCertExpiry(endpoint.check_cert_expiry || false);
+      setCertExpiryThreshold(endpoint.cert_expiry_threshold || 30);
+      setKeywordSearch(endpoint.keyword_search || '');
+      setUpsideDownMode(endpoint.upside_down_mode);
+      setTcpPort(endpoint.tcp_port);
+      setKafkaTopic(endpoint.kafka_topic);
+      setKafkaMessage(endpoint.kafka_message);
+      setKafkaConfig(endpoint.kafka_config);
+      
+      // mTLS values
+      setClientCertEnabled(endpoint.client_cert_enabled || false);
+      setClientCertPublicKey(endpoint.client_cert_public_key || '');
+      setClientCertPrivateKey(endpoint.client_cert_private_key || '');
+      setClientCertCa(endpoint.client_cert_ca || '');
+    }
+  }, [endpoint]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!url.trim()) return;
+    onUpdate({
+      ...endpoint,
+      name: name || url,
+      type,
+      url,
+      heartbeat_interval: heartbeatInterval,
+      retries,
+      http_method: httpMethod,
+      http_headers: httpHeaders,
+      http_body: httpBody,
+      ok_http_statuses: okHttpStatuses.split(',').map(s => s.trim()).filter(s => s),
+      check_cert_expiry: checkCertExpiry,
+      cert_expiry_threshold: certExpiryThreshold,
+      keyword_search: keywordSearch || null,
+      upside_down_mode: upsideDownMode,
+      tcp_port: tcpPort,
+      kafka_topic: kafkaTopic,
+      kafka_message: kafkaMessage,
+      kafka_config: kafkaConfig,
+      client_cert_enabled: clientCertEnabled,
+      client_cert_public_key: clientCertPublicKey || null,
+      client_cert_private_key: clientCertPrivateKey || null,
+      client_cert_ca: clientCertCa || null,
+    });
+  };
+
+  return (
+    <Box component="form" onSubmit={handleSubmit} sx={{ mb: 4 }}>
+      <TextField
+        label="Friendly Name"
+        variant="outlined"
+        fullWidth
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="My Awesome API"
+        sx={{ mb: 2 }}
+      />
+      <FormControl fullWidth sx={{ mb: 2 }}>
+        <InputLabel>Monitor Type</InputLabel>
+        <Select
+          value={type}
+          label="Monitor Type"
+          onChange={(e) => setType(e.target.value as MonitorType)}
+        >
+          <MenuItem value="http">HTTP</MenuItem>
+          <MenuItem value="ping">Ping</MenuItem>
+          <MenuItem value="tcp">TCP</MenuItem>
+          <MenuItem value="kafka_producer">Kafka Producer</MenuItem>
+          <MenuItem value="kafka_consumer">Kafka Consumer</MenuItem>
+        </Select>
+      </FormControl>
+      <TextField
+        label="Endpoint URL"
+        variant="outlined"
+        fullWidth
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+        placeholder="https://example.com"
+        required
+        sx={{ mb: 2 }}
+      />
+      {type === 'tcp' && (
+        <TextField
+          label="TCP Port"
+          variant="outlined"
+          type="number"
+          fullWidth
+          value={tcpPort || ''}
+          onChange={(e) => setTcpPort(parseInt(e.target.value, 10))}
+          sx={{ mb: 2 }}
+        />
+      )}
+      {(type === 'kafka_producer' || type === 'kafka_consumer') && (
+        <>
+          <TextField
+            label="Kafka Topic"
+            variant="outlined"
+            fullWidth
+            value={kafkaTopic || ''}
+            onChange={(e) => setKafkaTopic(e.target.value)}
+            sx={{ mb: 2 }}
+          />
+          {type === 'kafka_producer' && (
+            <TextField
+              label="Kafka Message"
+              variant="outlined"
+              fullWidth
+              multiline
+              rows={3}
+              value={kafkaMessage || ''}
+              onChange={(e) => setKafkaMessage(e.target.value)}
+              sx={{ mb: 2 }}
+            />
+          )}
+          <TextField
+            label="Kafka Config (JSON)"
+            variant="outlined"
+            fullWidth
+            multiline
+            rows={3}
+            value={kafkaConfig || ''}
+            onChange={(e) => setKafkaConfig(e.target.value)}
+            placeholder='{ "sasl": { "mechanisms": "PLAIN", "username": "...", "password": "..." } }'
+            sx={{ mb: 2 }}
+          />
+        </>
+      )}
+      <Box sx={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }} onClick={() => setShowAdvanced(!showAdvanced)}>
+        <Typography variant="subtitle1">Advanced Options</Typography>
+        <IconButton size="small">
+          <ExpandMoreIcon
+            sx={{
+              transform: showAdvanced ? 'rotate(180deg)' : 'rotate(0deg)',
+              transition: 'transform 0.3s',
+            }}
+          />
+        </IconButton>
+      </Box>
+      <Collapse in={showAdvanced}>
+        <TextField
+          label="Heartbeat Interval (seconds)"
+          variant="outlined"
+          type="number"
+          fullWidth
+          value={heartbeatInterval}
+          onChange={(e) => setHeartbeatInterval(parseInt(e.target.value, 10))}
+          sx={{ mt: 2, mb: 2 }}
+        />
+        <TextField
+          label="Retries before failure"
+          variant="outlined"
+          type="number"
+          fullWidth
+          value={retries}
+          onChange={(e) => setRetries(parseInt(e.target.value, 10))}
+          sx={{ mb: 2 }}
+        />
+        {type === 'http' && (
+          <>
+            <FormControl fullWidth sx={{ mb: 2 }}>
+              <InputLabel>HTTP Method</InputLabel>
+              <Select
+                value={httpMethod}
+                label="HTTP Method"
+                onChange={(e) => setHttpMethod(e.target.value)}
+              >
+                <MenuItem value="GET">GET</MenuItem>
+                <MenuItem value="POST">POST</MenuItem>
+                <MenuItem value="PUT">PUT</MenuItem>
+                <MenuItem value="DELETE">DELETE</MenuItem>
+                <MenuItem value="PATCH">PATCH</MenuItem>
+                <MenuItem value="HEAD">HEAD</MenuItem>
+                <MenuItem value="OPTIONS">OPTIONS</MenuItem>
+              </Select>
+            </FormControl>
+            <TextField
+              label="HTTP Headers (JSON)"
+              variant="outlined"
+              fullWidth
+              multiline
+              rows={3}
+              value={httpHeaders}
+              onChange={(e) => setHttpHeaders(e.target.value)}
+              placeholder='{ "Authorization": "Bearer your-token" }'
+              sx={{ mb: 2 }}
+            />
+            <TextField
+              label="HTTP Body"
+              variant="outlined"
+              fullWidth
+              multiline
+              rows={3}
+              value={httpBody}
+              onChange={(e) => setHttpBody(e.target.value)}
+              sx={{ mb: 2 }}
+            />
+            <TextField
+              label="OK HTTP Statuses (comma-separated)"
+              variant="outlined"
+              fullWidth
+              value={okHttpStatuses}
+              onChange={(e) => setOkHttpStatuses(e.target.value)}
+              placeholder="200,201,302"
+              sx={{ mb: 2 }}
+            />
+            <TextField
+              label="Keyword Search (case-sensitive)"
+              variant="outlined"
+              fullWidth
+              value={keywordSearch}
+              onChange={(e) => setKeywordSearch(e.target.value)}
+              placeholder="success"
+              helperText="If specified, the response must contain this keyword to be considered successful"
+              sx={{ mb: 2 }}
+            />
+            <FormControlLabel
+              control={<Checkbox checked={checkCertExpiry} onChange={(e) => setCheckCertExpiry(e.target.checked)} />}
+              label="Check SSL Certificate Expiry"
+            />
+            <TextField
+              label="Certificate Expiry Threshold (days)"
+              variant="outlined"
+              type="number"
+              fullWidth
+              value={certExpiryThreshold}
+              onChange={(e) => setCertExpiryThreshold(parseInt(e.target.value, 10))}
+              sx={{ mt: 2, mb: 2 }}
+              disabled={!checkCertExpiry}
+            />
+          </>
+        )}
+        {(type === 'http' || type === 'kafka_producer' || type === 'kafka_consumer') && (
+          <>
+            <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>
+              mTLS (Client Certificates)
+            </Typography>
+            <FormControlLabel
+              control={<Checkbox checked={clientCertEnabled} onChange={(e) => setClientCertEnabled(e.target.checked)} />}
+              label="Enable Client Certificate Authentication"
+              sx={{ mb: 2 }}
+            />
+            {clientCertEnabled && (
+              <>
+                <TextField
+                  label="Client Certificate (PEM format)"
+                  variant="outlined"
+                  fullWidth
+                  multiline
+                  rows={4}
+                  value={clientCertPublicKey}
+                  onChange={(e) => setClientCertPublicKey(e.target.value)}
+                  placeholder="-----BEGIN CERTIFICATE-----&#10;MIIBkTCB+wIJAMIcoOY...&#10;-----END CERTIFICATE-----"
+                  sx={{ mb: 2 }}
+                />
+                <TextField
+                  label="Private Key (PEM format)"
+                  variant="outlined"
+                  fullWidth
+                  multiline
+                  rows={4}
+                  value={clientCertPrivateKey}
+                  onChange={(e) => setClientCertPrivateKey(e.target.value)}
+                  placeholder="-----BEGIN PRIVATE KEY-----&#10;MIIEvgIBADANBgkqhkiG...&#10;-----END PRIVATE KEY-----"
+                  sx={{ mb: 2 }}
+                />
+                <TextField
+                  label="CA Certificate (PEM format, optional)"
+                  variant="outlined"
+                  fullWidth
+                  multiline
+                  rows={4}
+                  value={clientCertCa}
+                  onChange={(e) => setClientCertCa(e.target.value)}
+                  placeholder="-----BEGIN CERTIFICATE-----&#10;MIIBkTCB+wIJAMIcoOY...&#10;-----END CERTIFICATE-----"
+                  helperText="Optional: CA certificate to verify the server certificate"
+                  sx={{ mb: 2 }}
+                />
+              </>
+            )}
+          </>
+        )}
+        <FormControlLabel
+          control={<Checkbox checked={upsideDownMode} onChange={(e) => setUpsideDownMode(e.target.checked)} />}
+          label="Upside Down Mode (Fail on success)"
+        />
+      </Collapse>
+      <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-end' }}>
+        <Button onClick={onCancel} sx={{ mr: 2 }}>
+          Cancel
+        </Button>
+        <Button type="submit" variant="contained" color="primary">
+          Update Monitor
+        </Button>
+      </Box>
+    </Box>
+  );
+};
+
+export default EditEndpointForm;

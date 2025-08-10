@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  monitor:
+    image: ghcr.io/your-username/endpoint-monitor:latest
+    container_name: endpoint-monitor
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - monitor_data:/app/data
+    environment:
+      # Database configuration
+      - DB_PATH=/app/data/db.sqlite
+      
+      # Security configuration
+      - JWT_SECRET=${JWT_SECRET:-change-this-super-secret-jwt-key-in-production}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-7d}
+      
+      # Default admin credentials
+      - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-admin123}
+      
+      # Application configuration
+      - NODE_ENV=production
+      - PORT=3001
+      
+      # Logging configuration
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    
+    healthcheck:
+      test: ["CMD", "bun", "--cwd", "backend", "-e", "fetch('http://localhost:3001/api/endpoints').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Resource limits (optional, adjust based on your needs)
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+volumes:
+  monitor_data:
+    driver: local

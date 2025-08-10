@@ -1,0 +1,49 @@
+# Node modules
+node_modules
+frontend/node_modules
+backend/node_modules
+
+# Build outputs
+frontend/dist
+frontend/build
+
+# Database files
+*.sqlite
+*.db
+
+# Logs
+*.log
+logs/
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Documentation
+README.md
+*.md
+
+# Misc
+.clinerules/

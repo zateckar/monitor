@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  monitor-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: endpoint-monitor-dev
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - monitor_dev_data:/app/data
+      # Mount source code for development (optional - for hot reload)
+      # - ./backend:/app/backend
+      # - ./frontend/dist:/app/frontend/dist
+    environment:
+      # Database configuration
+      - DB_PATH=/app/data/db.sqlite
+      
+      # Security configuration (use strong secrets in production)
+      - JWT_SECRET=dev-jwt-secret-change-in-production
+      - JWT_EXPIRES_IN=7d
+      
+      # Default admin credentials
+      - DEFAULT_ADMIN_PASSWORD=admin123
+      
+      # Application configuration
+      - NODE_ENV=development
+      - PORT=3001
+      
+      # Logging configuration
+      - LOG_LEVEL=debug
+    
+    healthcheck:
+      test: ["CMD", "bun", "--cwd", "backend", "-e", "fetch('http://localhost:3001/api/endpoints').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  monitor_dev_data:
+    driver: local
