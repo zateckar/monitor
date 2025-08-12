@@ -51,7 +51,7 @@ const UserManagement: React.FC = () => {
   const fetchUsers = async () => {
     try {
       setLoading(true);
-      const response = await fetch('http://localhost:3001/api/admin/users', {
+      const response = await fetch('/api/admin/users', {
         credentials: 'include',
       });
       
@@ -70,7 +70,7 @@ const UserManagement: React.FC = () => {
 
   const handleCreateUser = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/admin/users', {
+      const response = await fetch('/api/admin/users', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -106,7 +106,7 @@ const UserManagement: React.FC = () => {
         updateData.password = formData.password;
       }
 
-      const response = await fetch(`http://localhost:3001/api/admin/users/${selectedUser.id}`, {
+      const response = await fetch(`/api/admin/users/${selectedUser.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -135,7 +135,7 @@ const UserManagement: React.FC = () => {
     }
 
     try {
-      const response = await fetch(`http://localhost:3001/api/admin/users/${userId}`, {
+      const response = await fetch(`/api/admin/users/${userId}`, {
         method: 'DELETE',
         credentials: 'include',
       });

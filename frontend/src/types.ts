@@ -117,6 +117,7 @@ export interface OIDCProvider {
   client_id: string;
   client_secret: string;
   scopes: string;
+  redirect_base_url: string;
   is_active: boolean;
   created_at: string;
 }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Typography, Card, Box, CircularProgress, LinearProgress, Avatar, Grid, Stack } from '@mui/material';
+import { Typography, Card, Box, CircularProgress, LinearProgress, Avatar, Stack, Grid} from '@mui/material';
 import type { Endpoint } from '../types';
 import { formatDateTime, formatDate } from '../utils/timezone';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
@@ -93,112 +93,106 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
           <CircularProgress />
         </Box>
       ) : stats ? (
-        <Grid container spacing={2}>
+        <Box 
+          sx={{ 
+            display: 'grid',
+            gridTemplateColumns: {
+              xs: '1fr',
+              sm: 'repeat(auto-fit, minmax(250px, 1fr))',
+              md: 'repeat(auto-fit, minmax(280px, 1fr))'
+            },
+            gap: 2
+          }}
+        >
           {/* Last Checked */}
-          <Grid item xs={12} sm={4} md={3}>
-            <StatCard
-              icon={<AccessTimeIcon sx={{ fontSize: 18 }} />}
-              title="Last Checked"
-              value={endpoint.last_checked ? formatDateTime(endpoint.last_checked).split(' ')[1] : 'Never'}
-              subtitle={endpoint.last_checked ? formatDateTime(endpoint.last_checked).split(' ')[0] : ''}
-              color="primary"
-            />
-          </Grid>
+          <StatCard
+            icon={<AccessTimeIcon sx={{ fontSize: 18 }} />}
+            title="Last Checked"
+            value={endpoint.last_checked ? formatDateTime(endpoint.last_checked).split(' ')[1] : 'Never'}
+            subtitle={endpoint.last_checked ? formatDateTime(endpoint.last_checked).split(' ')[0] : ''}
+            color="primary"
+          />
 
           {/* Current Response Time */}
-          <Grid item xs={12} sm={4} md={3}>
-            <StatCard
-              icon={<SpeedIcon sx={{ fontSize: 18 }} />}
-              title="Current Response"
-              value={endpoint.current_response ? `${endpoint.current_response.toFixed(0)} ms` : 'N/A'}
-              color={endpoint.current_response ? (endpoint.current_response < 500 ? 'success' : endpoint.current_response < 1000 ? 'warning' : 'error') : 'grey'}
-            />
-          </Grid>
+          <StatCard
+            icon={<SpeedIcon sx={{ fontSize: 18 }} />}
+            title="Current Response"
+            value={endpoint.current_response ? `${endpoint.current_response.toFixed(0)} ms` : 'N/A'}
+            color={endpoint.current_response ? (endpoint.current_response < 500 ? 'success' : endpoint.current_response < 1000 ? 'warning' : 'error') : 'grey'}
+          />
 
           {/* Average Response Time */}
-          <Grid item xs={12} sm={4} md={3}>
-            <StatCard
-              icon={<SpeedIcon sx={{ fontSize: 18 }} />}
-              title={`Avg. Response (${timeRangeLabel})`}
-              value={`${stats.avg_response.toFixed(0)} ms`}
-              color={stats.avg_response < 500 ? 'success' : stats.avg_response < 1000 ? 'warning' : 'error'}
-            />
-          </Grid>
+          <StatCard
+            icon={<SpeedIcon sx={{ fontSize: 18 }} />}
+            title={`Avg. Response (${timeRangeLabel})`}
+            value={`${stats.avg_response.toFixed(0)} ms`}
+            color={stats.avg_response < 500 ? 'success' : stats.avg_response < 1000 ? 'warning' : 'error'}
+          />
 
           {/* Monitoring Coverage */}
-          <Grid item xs={12} sm={4} md={3}>
-            <StatCard
-              icon={<MonitorIcon sx={{ fontSize: 18 }} />}
-              title={`Coverage (${timeRangeLabel})`}
-              value={`${stats.monitoring_coverage.toFixed(1)}%`}
-              subtitle={stats.monitoring_coverage < 100 ? 'Some gaps detected' : 'Complete coverage'}
-              progress={stats.monitoring_coverage}
-              color={getCoverageColor(stats.monitoring_coverage)}
-            />
-          </Grid>
+          <StatCard
+            icon={<MonitorIcon sx={{ fontSize: 18 }} />}
+            title={`Coverage (${timeRangeLabel})`}
+            value={`${stats.monitoring_coverage.toFixed(1)}%`}
+            subtitle={stats.monitoring_coverage < 100 ? 'Some gaps detected' : 'Complete coverage'}
+            progress={stats.monitoring_coverage}
+            color={getCoverageColor(stats.monitoring_coverage)}
+          />
 
           {/* Uptime Current Period */}
-          <Grid item xs={12} sm={4} md={3}>
-            <StatCard
-              icon={<TrendingUpIcon sx={{ fontSize: 18 }} />}
-              title={`Uptime (${timeRangeLabel})`}
-              value={`${stats.uptime.toFixed(2)}%`}
-              progress={stats.uptime}
-              color={getProgressColor(stats.uptime)}
-            />
-          </Grid>
+          <StatCard
+            icon={<TrendingUpIcon sx={{ fontSize: 18 }} />}
+            title={`Uptime (${timeRangeLabel})`}
+            value={`${stats.uptime.toFixed(2)}%`}
+            progress={stats.uptime}
+            color={getProgressColor(stats.uptime)}
+          />
 
           {/* Uptime 30 Days */}
-          <Grid item xs={12} sm={4} md={3}>
-            <StatCard
-              icon={<TrendingUpIcon sx={{ fontSize: 18 }} />}
-              title="Uptime (30 days)"
-              value={`${endpoint.uptime_30d !== null && endpoint.uptime_30d !== undefined ? endpoint.uptime_30d.toFixed(2) : '0.00'}%`}
-              progress={endpoint.uptime_30d || 0}
-              color={getProgressColor(endpoint.uptime_30d || 0)}
-            />
-          </Grid>
+          <StatCard
+            icon={<TrendingUpIcon sx={{ fontSize: 18 }} />}
+            title="Uptime (30 days)"
+            value={`${endpoint.uptime_30d !== null && endpoint.uptime_30d !== undefined ? endpoint.uptime_30d.toFixed(2) : '0.00'}%`}
+            progress={endpoint.uptime_30d || 0}
+            color={getProgressColor(endpoint.uptime_30d || 0)}
+          />
 
           {/* Uptime 1 Year */}
-          <Grid item xs={12} sm={4} md={3}>
-            <StatCard
-              icon={<TrendingUpIcon sx={{ fontSize: 18 }} />}
-              title="Uptime (1 year)"
-              value={`${endpoint.uptime_1y !== null && endpoint.uptime_1y !== undefined ? endpoint.uptime_1y.toFixed(2) : '0.00'}%`}
-              progress={endpoint.uptime_1y || 0}
-              color={getProgressColor(endpoint.uptime_1y || 0)}
-            />
-          </Grid>
+          <StatCard
+            icon={<TrendingUpIcon sx={{ fontSize: 18 }} />}
+            title="Uptime (1 year)"
+            value={`${endpoint.uptime_1y !== null && endpoint.uptime_1y !== undefined ? endpoint.uptime_1y.toFixed(2) : '0.00'}%`}
+            progress={endpoint.uptime_1y || 0}
+            color={getProgressColor(endpoint.uptime_1y || 0)}
+          />
 
           {/* Certificate Expiry */}
-          <Grid item xs={12} sm={4} md={3}>
-            <StatCard
-              icon={<SecurityIcon sx={{ fontSize: 18 }} />}
-              title="Certificate"
-              value={
-                endpoint.check_cert_expiry && endpoint.cert_expires_in !== null
-                  ? `${endpoint.cert_expires_in} days`
-                  : endpoint.check_cert_expiry
-                  ? 'Check failed'
-                  : 'Not enabled'
-              }
-              subtitle={
-                endpoint.cert_expiry_date && endpoint.cert_expires_in !== null
-                  ? formatDate(endpoint.cert_expiry_date)
-                  : undefined
-              }
-              color={
-                endpoint.cert_expires_in === null
-                  ? 'grey'
-                  : endpoint.cert_expires_in <= 30
-                  ? 'error'
-                  : endpoint.cert_expires_in <= 90
-                  ? 'warning'
-                  : 'success'
-              }
-            />
-          </Grid>
-        </Grid>
+          <StatCard
+            icon={<SecurityIcon sx={{ fontSize: 18 }} />}
+            title="Certificate"
+            value={
+              endpoint.check_cert_expiry && endpoint.cert_expires_in !== null
+                ? `${endpoint.cert_expires_in} days`
+                : endpoint.check_cert_expiry
+                ? 'Check failed'
+                : 'Not enabled'
+            }
+            subtitle={
+              endpoint.cert_expiry_date && endpoint.cert_expires_in !== null
+                ? formatDate(endpoint.cert_expiry_date)
+                : undefined
+            }
+            color={
+              endpoint.cert_expires_in === null
+                ? 'grey'
+                : endpoint.cert_expires_in <= 30
+                ? 'error'
+                : endpoint.cert_expires_in <= 90
+                ? 'warning'
+                : 'success'
+            }
+          />
+        </Box>
       ) : (
         <Typography>Could not load stats.</Typography>
       )}

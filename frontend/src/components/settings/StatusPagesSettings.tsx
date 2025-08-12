@@ -50,7 +50,7 @@ const StatusPagesSettings: React.FC = () => {
 
   const fetchStatusPages = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/status-pages');
+      const response = await fetch('/api/status-pages');
       const data = await response.json();
       setStatusPages(data);
     } catch (err) {
@@ -60,7 +60,7 @@ const StatusPagesSettings: React.FC = () => {
 
   const fetchEndpoints = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/endpoints');
+      const response = await fetch('/api/endpoints');
       const data = await response.json();
       setEndpoints(data);
     } catch (err) {
@@ -120,8 +120,8 @@ const StatusPagesSettings: React.FC = () => {
 
     try {
       const url = editingPage 
-        ? `http://localhost:3001/api/status-pages/${editingPage.id}`
-        : 'http://localhost:3001/api/status-pages';
+        ? `/api/status-pages/${editingPage.id}`
+        : '/api/status-pages';
       
       const method = editingPage ? 'PUT' : 'POST';
       
@@ -152,7 +152,7 @@ const StatusPagesSettings: React.FC = () => {
 
     setLoading(true);
     try {
-      const response = await fetch(`http://localhost:3001/api/status-pages/${id}`, {
+      const response = await fetch(`/api/status-pages/${id}`, {
         method: 'DELETE',
       });
 

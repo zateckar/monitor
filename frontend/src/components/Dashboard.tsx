@@ -215,7 +215,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
         <Box sx={{ mx: -1 }}>
           <Grid container spacing={2}>
           {/* Total Monitors */}
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <Card elevation={2}>
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -234,7 +234,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
           </Grid>
 
           {/* Up Monitors */}
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <Card elevation={2}>
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -253,7 +253,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
           </Grid>
 
           {/* Down Monitors */}
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <Card elevation={2}>
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -272,7 +272,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
           </Grid>
 
           {/* Paused Monitors */}
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <Card elevation={2}>
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -296,7 +296,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
         <Box sx={{ mx: -1 }}>
           <Grid container spacing={2}>
           {/* Average Response Time */}
-          <Grid item xs={12} md={6}>
+          <Grid size={{ xs: 12, md: 6 }}>
             <Card elevation={2}>
               <CardHeader
                 title={
@@ -318,7 +318,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
           </Grid>
 
           {/* Overall Uptime */}
-          <Grid item xs={12} md={6}>
+          <Grid size={{ xs: 12, md: 6 }}>
             <Card elevation={2}>
               <CardHeader
                 title={

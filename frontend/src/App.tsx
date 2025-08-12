@@ -23,12 +23,12 @@ interface ThemeSettings {
 
 const defaultThemeSettings: ThemeSettings = {
   mode: 'light',
-  primaryColor: '#1976d2',
-  secondaryColor: '#dc004e',
+  primaryColor: '#419468',
+  secondaryColor: '#78faae',
   errorColor: '#d32f2f',
   warningColor: '#ed6c02',
   infoColor: '#0288d1',
-  successColor: '#2e7d32',
+  successColor: '#59bc87',
 };
 
 function StatusPageWrapper() {

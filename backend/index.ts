@@ -1,9 +1,7 @@
 import { Elysia } from 'elysia';
 import { cors } from '@elysiajs/cors';
 import path from 'path';
-import { Database } from 'sqlite';
-import { open } from 'sqlite';
-import sqlite3 from 'sqlite3';
+import { Database } from 'bun:sqlite';
 import ping from 'ping';
 import net from 'net';
 import { spawn } from 'child_process';
@@ -11,52 +9,17 @@ import tls from 'tls';
 import { Kafka, logLevel } from 'kafkajs';
 import https from 'https';
 import jwt from 'jsonwebtoken';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import { parse as parseCookie, serialize as serializeCookie } from 'cookie';
 import { Issuer, type Client, generators } from 'openid-client';
+import { createHash } from 'crypto';
+import { stat } from 'fs/promises';
+import { gzipSync } from 'bun';
 
-type MonitorType = 'http' | 'ping' | 'tcp' | 'kafka_producer' | 'kafka_consumer';
-
-// Authentication types
-interface User {
-  id: number;
-  username: string;
-  email?: string;
-  password_hash?: string;
-  role: 'admin' | 'user';
-  oidc_provider_id?: number;
-  oidc_subject?: string;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-  last_login?: string;
-}
-
-interface OIDCProvider {
-  id: number;
-  name: string;
-  issuer_url: string;
-  client_id: string;
-  client_secret: string;
-  scopes: string;
-  is_active: boolean;
-  created_at: string;
-}
-
-interface UserSession {
-  id: number;
-  user_id: number;
-  session_token: string;
-  expires_at: string;
-  created_at: string;
-}
-
-// JWT configuration
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
-
-// Database configuration
-const DB_PATH = process.env.DB_PATH || './db.sqlite';
+// Import types and configuration
+import type { MonitorType, User, OIDCProvider, UserSession, Endpoint } from './src/types';
+import { JWT_SECRET, JWT_EXPIRES_IN, DB_PATH } from './src/config/constants';
+import { initializeDatabase } from './src/config/database';
 
 // Helper function to create HTTP agent with mTLS support
 function createHttpAgent(endpoint: Endpoint): https.Agent | undefined {
@@ -86,13 +49,12 @@ function createHttpAgent(endpoint: Endpoint): https.Agent | undefined {
 // Gap-aware uptime calculation function
 async function calculateGapAwareUptime(db: Database, endpointId: number, heartbeatInterval: number, period: string) {
   // Get all checks in the time period, ordered by time
-  const checks = await db.all(
+  const checks = db.query(
     `SELECT created_at, status, response_time
      FROM response_times 
      WHERE endpoint_id = ? AND created_at >= datetime('now', '-${period}')
-     ORDER BY created_at ASC`,
-    endpointId
-  );
+     ORDER BY created_at ASC`
+  ).all(endpointId) as any[];
 
   if (checks.length === 0) {
     return { avg_response: 0, uptime: 0, monitoring_coverage: 0 };
@@ -199,48 +161,9 @@ async function calculateGapAwareUptime(db: Database, endpointId: number, heartbe
   };
 }
 
-interface Endpoint {
-  id: number;
-  name: string;
-  type: MonitorType;
-  url: string; // For HTTP, it's the URL; for Ping/TCP, the host; for Kafka, the bootstrap server
-  status: string;
-  last_checked: string | null;
-  heartbeat_interval: number;
-  retries: number;
-  failed_attempts: number;
-  upside_down_mode: boolean;
-  paused: boolean;
-
-  // HTTP specific
-  http_method?: string;
-  http_headers?: string | null;
-  http_body?: string | null;
-  ok_http_statuses?: string | null;
-  check_cert_expiry?: boolean;
-  cert_expiry_threshold?: number;
-  keyword_search?: string | null;
-
-  // mTLS (Client Certificates) - for HTTP and Kafka
-  client_cert_enabled?: boolean;
-  client_cert_public_key?: string | null; // PEM format
-  client_cert_private_key?: string | null; // PEM format
-  client_cert_ca?: string | null; // PEM format
-
-  // TCP specific
-  tcp_port?: number;
-
-  // Kafka specific
-  kafka_topic?: string;
-  kafka_message?: string; // For producer
-  kafka_config?: string; // For consumer/producer specific configs
-}
-
 async function main() {
-  const db: Database = await open({
-    filename: DB_PATH,
-    driver: sqlite3.Database
-  });
+  // Initialize database
+  const db = initializeDatabase();
 
   // Logging utility
   let currentLogLevel = 'info';
@@ -254,9 +177,9 @@ async function main() {
       
       // Log to database (with error handling to avoid infinite loops)
       try {
-        await db.run(
+        db.run(
           'INSERT INTO application_logs (level, message, component) VALUES (?, ?, ?)',
-          level, message, component || null
+          [level, message, component || null]
         );
       } catch (err) {
         console.error('Failed to write log to database:', err);
@@ -272,140 +195,6 @@ async function main() {
   };
 
   logger.info('Starting Endpoint Monitor application', 'SYSTEM');
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS endpoints (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT,
-      type TEXT NOT NULL DEFAULT 'http',
-      url TEXT NOT NULL,
-      status TEXT NOT NULL,
-      last_checked DATETIME,
-      heartbeat_interval INTEGER DEFAULT 60,
-      retries INTEGER DEFAULT 3,
-      failed_attempts INTEGER DEFAULT 0,
-      upside_down_mode BOOLEAN DEFAULT false,
-      paused BOOLEAN DEFAULT false,
-      
-      -- HTTP specific
-      http_method TEXT DEFAULT 'GET',
-      http_headers TEXT,
-      http_body TEXT,
-      ok_http_statuses TEXT,
-      check_cert_expiry BOOLEAN DEFAULT false,
-      cert_expiry_threshold INTEGER DEFAULT 30,
-      keyword_search TEXT,
-
-      -- mTLS (Client Certificates) - for HTTP and Kafka
-      client_cert_enabled BOOLEAN DEFAULT false,
-      client_cert_public_key TEXT,
-      client_cert_private_key TEXT,
-      client_cert_ca TEXT,
-
-      -- TCP specific
-      tcp_port INTEGER,
-
-      -- Kafka specific
-      kafka_topic TEXT,
-      kafka_message TEXT,
-      kafka_config TEXT
-    )
-  `);
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS notification_services (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      type TEXT NOT NULL,
-      config TEXT NOT NULL
-    )
-  `);
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS monitor_notification_services (
-      monitor_id INTEGER,
-      notification_service_id INTEGER,
-      PRIMARY KEY (monitor_id, notification_service_id),
-      FOREIGN KEY(monitor_id) REFERENCES endpoints(id) ON DELETE CASCADE,
-      FOREIGN KEY(notification_service_id) REFERENCES notification_services(id) ON DELETE CASCADE
-    )
-  `);
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS response_times (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      endpoint_id INTEGER,
-      response_time INTEGER,
-      status TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(endpoint_id) REFERENCES endpoints(id)
-    )
-  `);
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS application_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      level TEXT NOT NULL,
-      message TEXT NOT NULL,
-      component TEXT,
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS status_pages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      slug TEXT NOT NULL UNIQUE,
-      description TEXT,
-      is_public BOOLEAN DEFAULT true,
-      monitor_ids TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  // Authentication tables
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE NOT NULL,
-      email TEXT UNIQUE,
-      password_hash TEXT,
-      role TEXT NOT NULL DEFAULT 'user',
-      oidc_provider_id INTEGER,
-      oidc_subject TEXT,
-      is_active BOOLEAN DEFAULT true,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      last_login DATETIME,
-      FOREIGN KEY(oidc_provider_id) REFERENCES oidc_providers(id)
-    )
-  `);
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS oidc_providers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      issuer_url TEXT NOT NULL,
-      client_id TEXT NOT NULL,
-      client_secret TEXT NOT NULL,
-      scopes TEXT DEFAULT 'openid profile email',
-      is_active BOOLEAN DEFAULT true,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS user_sessions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      session_token TEXT UNIQUE NOT NULL,
-      expires_at DATETIME NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    )
-  `);
 
 
   // Authentication utilities
@@ -463,12 +252,9 @@ async function main() {
     }
 
     // Get user from database to ensure they still exist and are active
-    const user = await db.get(
-      'SELECT * FROM users WHERE id = ? AND is_active = 1',
-      decoded.id
-    );
+      const user = db.query('SELECT * FROM users WHERE id = ? AND is_active = 1').get(decoded.id) as User | null;
 
-    return user as User | null;
+    return user;
   };
 
   const requireAuth = (handler: any) => {
@@ -509,18 +295,14 @@ async function main() {
 
   // Create default admin user if no users exist
   const createDefaultAdminUser = async () => {
-    const userCount = await db.get('SELECT COUNT(*) as count FROM users');
+    const userCount = db.query('SELECT COUNT(*) as count FROM users').get() as any;
     if (userCount.count === 0) {
       const defaultPassword = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123';
       const hashedPassword = await hashPassword(defaultPassword);
       
-      await db.run(
+      db.run(
         'INSERT INTO users (username, email, password_hash, role, is_active) VALUES (?, ?, ?, ?, ?)',
-        'admin',
-        'admin@localhost',
-        hashedPassword,
-        'admin',
-        true
+        ['admin', 'admin@localhost', hashedPassword, 'admin', true]
       );
       
       logger.info('Created default admin user (username: admin, password: ' + defaultPassword + ')', 'AUTH');
@@ -545,7 +327,7 @@ async function main() {
     }
 
     // Get provider from database
-    const provider = await db.get('SELECT * FROM oidc_providers WHERE id = ? AND is_active = 1', providerId);
+      const provider = db.query('SELECT * FROM oidc_providers WHERE id = ? AND is_active = 1').get(providerId) as any;
     if (!provider) {
       return null;
     }
@@ -554,11 +336,14 @@ async function main() {
       // Discover the issuer
       const issuer = await Issuer.discover(provider.issuer_url);
       
+      // Use configurable redirect base URL
+      const redirectBaseUrl = provider.redirect_base_url || 'http://localhost:3001';
+      
       // Create client
       const client = new issuer.Client({
         client_id: provider.client_id,
         client_secret: provider.client_secret,
-        redirect_uris: [`http://localhost:3001/api/auth/oidc/callback/${providerId}`],
+        redirect_uris: [`${redirectBaseUrl}/api/auth/oidc/callback/${providerId}`],
         response_types: ['code'],
       });
 
@@ -585,12 +370,11 @@ async function main() {
   setInterval(cleanupExpiredStates, 5 * 60 * 1000);
 
   const sendNotification = async (endpoint: Endpoint, status: string) => {
-    const services = await db.all(
+    const services = db.query(
       `SELECT ns.* FROM notification_services ns
        JOIN monitor_notification_services mns ON ns.id = mns.notification_service_id
-       WHERE mns.monitor_id = ?`,
-      endpoint.id
-    );
+       WHERE mns.monitor_id = ?`
+    ).all(endpoint.id) as any[];
 
     for (const service of services) {
       const config = JSON.parse(service.config);
@@ -652,7 +436,7 @@ async function main() {
   };
 
   const checkEndpoints = async () => {
-    const endpoints: Endpoint[] = await db.all('SELECT * FROM endpoints');
+    const endpoints: Endpoint[] = db.query('SELECT * FROM endpoints').all() as Endpoint[];
     for (const endpoint of endpoints) {
       const startTime = Date.now();
       let isOk = false;
@@ -846,8 +630,8 @@ async function main() {
         } else {
           logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) check successful - response time: ${responseTime}ms`, 'MONITORING');
         }
-        await db.run('UPDATE endpoints SET status = ?, failed_attempts = 0, last_checked = CURRENT_TIMESTAMP WHERE id = ?', 'UP', endpoint.id);
-        await db.run('INSERT INTO response_times (endpoint_id, response_time, status) VALUES (?, ?, ?)', endpoint.id, responseTime, 'UP');
+        db.run('UPDATE endpoints SET status = ?, failed_attempts = 0, last_checked = CURRENT_TIMESTAMP WHERE id = ?', ['UP', endpoint.id]);
+        db.run('INSERT INTO response_times (endpoint_id, response_time, status) VALUES (?, ?, ?)', [endpoint.id, responseTime, 'UP']);
       } else {
         throw new Error('Check failed');
       }
@@ -862,12 +646,12 @@ async function main() {
         } else {
           logger.warn(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) check failed (attempt ${newFailedAttempts}). Error: ${error}`, 'MONITORING');
         }
-        await db.run('UPDATE endpoints SET status = ?, failed_attempts = ?, last_checked = CURRENT_TIMESTAMP WHERE id = ?', 'DOWN', newFailedAttempts, endpoint.id);
+        db.run('UPDATE endpoints SET status = ?, failed_attempts = ?, last_checked = CURRENT_TIMESTAMP WHERE id = ?', ['DOWN', newFailedAttempts, endpoint.id]);
       } else {
         logger.warn(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) check failed (attempt ${newFailedAttempts}/${endpoint.retries}). Error: ${error}`, 'MONITORING');
-        await db.run('UPDATE endpoints SET failed_attempts = ?, last_checked = CURRENT_TIMESTAMP WHERE id = ?', newFailedAttempts, endpoint.id);
+        db.run('UPDATE endpoints SET failed_attempts = ?, last_checked = CURRENT_TIMESTAMP WHERE id = ?', [newFailedAttempts, endpoint.id]);
       }
-      await db.run('INSERT INTO response_times (endpoint_id, response_time, status) VALUES (?, ?, ?)', endpoint.id, responseTime, 'DOWN');
+      db.run('INSERT INTO response_times (endpoint_id, response_time, status) VALUES (?, ?, ?)', [endpoint.id, responseTime, 'DOWN']);
     }
     }
   };
@@ -884,10 +668,7 @@ async function main() {
       }
 
       // Get user from database
-      const user = await db.get(
-        'SELECT * FROM users WHERE username = ? AND is_active = 1',
-        username
-      );
+      const user = db.query('SELECT * FROM users WHERE username = ? AND is_active = 1').get(username) as any;
 
       if (!user || !user.password_hash) {
         set.status = 401;
@@ -902,10 +683,7 @@ async function main() {
       }
 
       // Update last login
-      await db.run(
-        'UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?',
-        user.id
-      );
+      db.run('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?', [user.id]);
 
       // Generate JWT token
       const token = generateToken(user);
@@ -961,9 +739,7 @@ async function main() {
     }))
     // OIDC Authentication API
     .get('/api/auth/oidc/providers', async () => {
-      const providers = await db.all(
-        'SELECT id, name, issuer_url FROM oidc_providers WHERE is_active = 1 ORDER BY name'
-      );
+      const providers = db.query('SELECT id, name, issuer_url FROM oidc_providers WHERE is_active = 1 ORDER BY name').all() as any[];
       return providers;
     })
     .get('/api/auth/oidc/login/:providerId', async ({ params, set }) => {
@@ -988,7 +764,7 @@ async function main() {
       });
 
       // Get provider scopes
-      const provider = await db.get('SELECT scopes FROM oidc_providers WHERE id = ?', providerId);
+      const provider = db.query('SELECT scopes FROM oidc_providers WHERE id = ?').get(providerId) as any;
       const scopes = provider?.scopes || 'openid profile email';
 
       // Generate authorization URL
@@ -1040,9 +816,13 @@ async function main() {
       }
 
       try {
+        // Get provider for redirect URL
+        const provider = db.query('SELECT redirect_base_url FROM oidc_providers WHERE id = ?').get(providerId) as any;
+        const redirectBaseUrl = provider?.redirect_base_url || 'http://localhost:3001';
+
         // Exchange authorization code for tokens
         const tokenSet = await client.callback(
-          `http://localhost:3001/api/auth/oidc/callback/${providerId}`,
+          `${redirectBaseUrl}/api/auth/oidc/callback/${providerId}`,
           { code, state },
           { 
             code_verifier: (stateData as any).code_verifier,
@@ -1074,28 +854,16 @@ async function main() {
         }
 
         // Check if user already exists
-        let user = await db.get(
-          'SELECT * FROM users WHERE oidc_provider_id = ? AND oidc_subject = ? AND is_active = 1',
-          providerId,
-          subject
-        );
+        let user = db.query('SELECT * FROM users WHERE oidc_provider_id = ? AND oidc_subject = ? AND is_active = 1').get(providerId, subject) as any;
 
         if (!user) {
           // Check if user exists with same email
           if (email) {
-            const existingEmailUser = await db.get(
-              'SELECT * FROM users WHERE email = ? AND is_active = 1',
-              email
-            );
+            const existingEmailUser = db.query('SELECT * FROM users WHERE email = ? AND is_active = 1').get(email) as any;
             
             if (existingEmailUser) {
               // Link existing user to OIDC provider
-              await db.run(
-                'UPDATE users SET oidc_provider_id = ?, oidc_subject = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-                providerId,
-                subject,
-                existingEmailUser.id
-              );
+              db.run('UPDATE users SET oidc_provider_id = ?, oidc_subject = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [providerId, subject, existingEmailUser.id]);
               user = existingEmailUser;
               logger.info(`Linked existing user "${existingEmailUser.username}" to OIDC provider ${providerId}`, 'OIDC');
             }
@@ -1103,26 +871,15 @@ async function main() {
 
           if (!user) {
             // Create new user
-            const result = await db.run(
-              'INSERT INTO users (username, email, oidc_provider_id, oidc_subject, role, is_active) VALUES (?, ?, ?, ?, ?, ?)',
-              username,
-              email || null,
-              providerId,
-              subject,
-              'user', // Default role for OIDC users
-              true
-            );
+            const result = db.run('INSERT INTO users (username, email, oidc_provider_id, oidc_subject, role, is_active) VALUES (?, ?, ?, ?, ?, ?)', [username, email || null, providerId, subject, 'user', true]);
 
-            user = await db.get('SELECT * FROM users WHERE id = ?', result.lastID);
+            user = db.query('SELECT * FROM users WHERE id = ?').get(result.lastInsertRowid) as any;
             logger.info(`Created new OIDC user "${username}" for provider ${providerId}`, 'OIDC');
           }
         }
 
         // Update last login
-        await db.run(
-          'UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?',
-          user.id
-        );
+        db.run('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?', [user.id]);
 
         // Generate JWT token
         const token = generateToken(user);
@@ -1158,21 +915,20 @@ async function main() {
     })
     // OIDC Provider Management API (admin only)
     .get('/api/admin/oidc-providers', requireRole('admin')(async () => {
-      const providers = await db.all(
-        'SELECT * FROM oidc_providers ORDER BY created_at DESC'
-      );
+      const providers = db.query('SELECT * FROM oidc_providers ORDER BY created_at DESC').all() as any[];
       return providers.map(provider => ({
         ...provider,
         is_active: Boolean(provider.is_active)
       }));
     }))
     .post('/api/admin/oidc-providers', requireRole('admin')(async ({ body }: any) => {
-      const { name, issuer_url, client_id, client_secret, scopes } = body as {
+      const { name, issuer_url, client_id, client_secret, scopes, redirect_base_url } = body as {
         name: string;
         issuer_url: string;
         client_id: string;
         client_secret: string;
         scopes?: string;
+        redirect_base_url?: string;
       };
 
       if (!name || !issuer_url || !client_id || !client_secret) {
@@ -1192,17 +948,9 @@ async function main() {
         });
       }
 
-      const result = await db.run(
-        'INSERT INTO oidc_providers (name, issuer_url, client_id, client_secret, scopes, is_active) VALUES (?, ?, ?, ?, ?, ?)',
-        name,
-        issuer_url,
-        client_id,
-        client_secret,
-        scopes || 'openid profile email',
-        true
-      );
+      const result = db.run('INSERT INTO oidc_providers (name, issuer_url, client_id, client_secret, scopes, redirect_base_url, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)', [name, issuer_url, client_id, client_secret, scopes || 'openid profile email', redirect_base_url || 'http://localhost:3001', true]);
 
-      const newProvider = await db.get('SELECT * FROM oidc_providers WHERE id = ?', result.lastID);
+      const newProvider = db.query('SELECT * FROM oidc_providers WHERE id = ?').get(result.lastInsertRowid) as any;
       
       logger.info(`Admin created OIDC provider "${name}"`, 'OIDC');
 
@@ -1213,17 +961,18 @@ async function main() {
     }))
     .put('/api/admin/oidc-providers/:id', requireRole('admin')(async ({ params, body }: any) => {
       const { id } = params;
-      const { name, issuer_url, client_id, client_secret, scopes, is_active } = body as {
+      const { name, issuer_url, client_id, client_secret, scopes, redirect_base_url, is_active } = body as {
         name?: string;
         issuer_url?: string;
         client_id?: string;
         client_secret?: string;
         scopes?: string;
+        redirect_base_url?: string;
         is_active?: boolean;
       };
 
       // Get current provider
-      const currentProvider = await db.get('SELECT * FROM oidc_providers WHERE id = ?', id);
+      const currentProvider = db.query('SELECT * FROM oidc_providers WHERE id = ?').get(id) as any;
       if (!currentProvider) {
         return new Response(JSON.stringify({ error: 'OIDC provider not found' }), {
           status: 404,
@@ -1243,57 +992,24 @@ async function main() {
         }
       }
 
-      // Prepare update fields
-      const updates: any = {};
-      const values: any[] = [];
-      
-      if (name !== undefined) {
-        updates.name = name;
-        values.push(name);
-      }
-      if (issuer_url !== undefined) {
-        updates.issuer_url = issuer_url;
-        values.push(issuer_url);
-      }
-      if (client_id !== undefined) {
-        updates.client_id = client_id;
-        values.push(client_id);
-      }
-      if (client_secret !== undefined) {
-        updates.client_secret = client_secret;
-        values.push(client_secret);
-      }
-      if (scopes !== undefined) {
-        updates.scopes = scopes;
-        values.push(scopes);
-      }
-      if (is_active !== undefined) {
-        updates.is_active = is_active;
-        values.push(is_active);
-      }
-
-      if (Object.keys(updates).length === 0) {
-        return new Response(JSON.stringify({ error: 'No fields to update' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-
-      // Build SQL
-      const setClause = Object.keys(updates).map(key => `${key} = ?`).join(', ');
-      values.push(id);
-
-      await db.run(
-        `UPDATE oidc_providers SET ${setClause} WHERE id = ?`,
-        ...values
+      // Update provider
+      db.run('UPDATE oidc_providers SET name = ?, issuer_url = ?, client_id = ?, client_secret = ?, scopes = ?, redirect_base_url = ?, is_active = ? WHERE id = ?', 
+        name || currentProvider.name,
+        issuer_url || currentProvider.issuer_url,
+        client_id || currentProvider.client_id,
+        client_secret || currentProvider.client_secret,
+        scopes || currentProvider.scopes,
+        redirect_base_url || currentProvider.redirect_base_url,
+        is_active !== undefined ? is_active : currentProvider.is_active,
+        id
       );
 
       // Clear cached client if configuration changed
-      if (issuer_url !== undefined || client_id !== undefined || client_secret !== undefined) {
+      if (issuer_url !== undefined || client_id !== undefined || client_secret !== undefined || redirect_base_url !== undefined) {
         oidcClients.delete(parseInt(id));
       }
 
-      const updatedProvider = await db.get('SELECT * FROM oidc_providers WHERE id = ?', id);
+      const updatedProvider = db.query('SELECT * FROM oidc_providers WHERE id = ?').get(id) as any;
 
       logger.info(`Admin updated OIDC provider "${currentProvider.name}" (ID: ${id})`, 'OIDC');
 
@@ -1306,7 +1022,7 @@ async function main() {
       const { id } = params;
 
       // Get provider before deletion
-      const provider = await db.get('SELECT name FROM oidc_providers WHERE id = ?', id);
+      const provider = db.query('SELECT name FROM oidc_providers WHERE id = ?').get(id) as any;
       if (!provider) {
         return new Response(JSON.stringify({ error: 'OIDC provider not found' }), {
           status: 404,
@@ -1315,10 +1031,7 @@ async function main() {
       }
 
       // Check if any users are linked to this provider
-      const linkedUsers = await db.get(
-        'SELECT COUNT(*) as count FROM users WHERE oidc_provider_id = ?',
-        id
-      );
+      const linkedUsers = db.query('SELECT COUNT(*) as count FROM users WHERE oidc_provider_id = ?').get(id) as any;
 
       if (linkedUsers.count > 0) {
         return new Response(JSON.stringify({ 
@@ -1329,7 +1042,7 @@ async function main() {
         });
       }
 
-      await db.run('DELETE FROM oidc_providers WHERE id = ?', id);
+      db.run('DELETE FROM oidc_providers WHERE id = ?', [id]);
 
       // Clear cached client
       oidcClients.delete(parseInt(id));
@@ -1340,9 +1053,7 @@ async function main() {
     }))
     // User management API (admin only)
     .get('/api/admin/users', requireRole('admin')(async () => {
-      const users = await db.all(
-        'SELECT id, username, email, role, is_active, created_at, updated_at, last_login FROM users ORDER BY created_at DESC'
-      );
+      const users = db.query('SELECT id, username, email, role, is_active, created_at, updated_at, last_login FROM users ORDER BY created_at DESC').all() as any[];
       return users;
     }))
     .post('/api/admin/users', requireRole('admin')(async ({ body }: any) => {
@@ -1361,7 +1072,7 @@ async function main() {
       }
 
       // Check if username already exists
-      const existingUser = await db.get('SELECT id FROM users WHERE username = ?', username);
+      const existingUser = db.query('SELECT id FROM users WHERE username = ?').get(username) as any;
       if (existingUser) {
         return new Response(JSON.stringify({ error: 'Username already exists' }), {
           status: 400,
@@ -1373,19 +1084,9 @@ async function main() {
       const hashedPassword = await hashPassword(password);
 
       // Create user
-      const result = await db.run(
-        'INSERT INTO users (username, email, password_hash, role, is_active) VALUES (?, ?, ?, ?, ?)',
-        username,
-        email || null,
-        hashedPassword,
-        role || 'user',
-        true
-      );
+      const result = db.run('INSERT INTO users (username, email, password_hash, role, is_active) VALUES (?, ?, ?, ?, ?)', [username, email || null, hashedPassword, role || 'user', true]);
 
-      const newUser = await db.get(
-        'SELECT id, username, email, role, is_active, created_at FROM users WHERE id = ?',
-        result.lastID
-      );
+      const newUser = db.query('SELECT id, username, email, role, is_active, created_at FROM users WHERE id = ?').get(result.lastInsertRowid) as any;
 
       logger.info(`Admin created new user "${username}" with role "${role}"`, 'AUTH');
 
@@ -1402,7 +1103,7 @@ async function main() {
       };
 
       // Get current user
-      const currentUser = await db.get('SELECT * FROM users WHERE id = ?', id);
+      const currentUser = db.query('SELECT * FROM users WHERE id = ?').get(id) as any;
       if (!currentUser) {
         return new Response(JSON.stringify({ error: 'User not found' }), {
           status: 404,
@@ -1410,66 +1111,22 @@ async function main() {
         });
       }
 
-      // Prepare update fields
-      const updates: any = {};
-      const values: any[] = [];
-      
-      if (username !== undefined) {
-        // Check if username is already taken by another user
-        const existingUser = await db.get('SELECT id FROM users WHERE username = ? AND id != ?', username, id);
-        if (existingUser) {
-          return new Response(JSON.stringify({ error: 'Username already exists' }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-        updates.username = username;
-        values.push(username);
-      }
-      if (email !== undefined) {
-        updates.email = email;
-        values.push(email);
-      }
-      if (role !== undefined) {
-        updates.role = role;
-        values.push(role);
-      }
-      if (is_active !== undefined) {
-        updates.is_active = is_active;
-        values.push(is_active);
-      }
+      // Update user
+      let hashedPassword = currentUser.password_hash;
       if (password) {
-        const hashedPassword = await hashPassword(password);
-        updates.password_hash = hashedPassword;
-        values.push(hashedPassword);
+        hashedPassword = await hashPassword(password);
       }
 
-      if (Object.keys(updates).length === 0) {
-        return new Response(JSON.stringify({ error: 'No fields to update' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-
-      // Add updated_at
-      updates.updated_at = 'CURRENT_TIMESTAMP';
-
-      // Build SQL
-      const setClause = Object.keys(updates).map(key => 
-        key === 'updated_at' ? `${key} = CURRENT_TIMESTAMP` : `${key} = ?`
-      ).join(', ');
-      
-      values.push(id);
-
-      await db.run(
-        `UPDATE users SET ${setClause} WHERE id = ?`,
-        ...values
-      );
-
-      const updatedUser = await db.get(
-        'SELECT id, username, email, role, is_active, created_at, updated_at FROM users WHERE id = ?',
+      db.run('UPDATE users SET username = ?, email = ?, role = ?, is_active = ?, password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        username || currentUser.username,
+        email || currentUser.email,
+        role || currentUser.role,
+        is_active !== undefined ? is_active : currentUser.is_active,
+        hashedPassword,
         id
       );
+
+      const updatedUser = db.query('SELECT id, username, email, role, is_active, created_at, updated_at FROM users WHERE id = ?').get(id) as any;
 
       logger.info(`Admin updated user "${currentUser.username}" (ID: ${id})`, 'AUTH');
 
@@ -1487,7 +1144,7 @@ async function main() {
       }
 
       // Get user before deletion
-      const userToDelete = await db.get('SELECT username FROM users WHERE id = ?', id);
+      const userToDelete = db.query('SELECT username FROM users WHERE id = ?').get(id) as any;
       if (!userToDelete) {
         return new Response(JSON.stringify({ error: 'User not found' }), {
           status: 404,
@@ -1495,20 +1152,17 @@ async function main() {
         });
       }
 
-      await db.run('DELETE FROM users WHERE id = ?', id);
+      db.run('DELETE FROM users WHERE id = ?', [id]);
 
       logger.info(`Admin deleted user "${userToDelete.username}" (ID: ${id})`, 'AUTH');
 
       return { success: true };
     }))
     .get('/api/endpoints', async () => {
-      const endpoints: Endpoint[] = await db.all('SELECT * FROM endpoints');
+      const endpoints: Endpoint[] = db.query('SELECT * FROM endpoints').all() as Endpoint[];
       const endpointsWithStats = await Promise.all(
         endpoints.map(async (endpoint) => {
-          const lastResponse = await db.get(
-            'SELECT response_time FROM response_times WHERE endpoint_id = ? ORDER BY created_at DESC LIMIT 1',
-            endpoint.id
-          );
+          const lastResponse = db.query('SELECT response_time FROM response_times WHERE endpoint_id = ? ORDER BY created_at DESC LIMIT 1').get(endpoint.id) as any;
 
           const stats24h = await calculateGapAwareUptime(db, endpoint.id, endpoint.heartbeat_interval || 60, '1 day');
           const stats30d = await calculateGapAwareUptime(db, endpoint.id, endpoint.heartbeat_interval || 60, '30 days');
@@ -1543,10 +1197,10 @@ async function main() {
             ok_http_statuses: endpoint.ok_http_statuses ? JSON.parse(endpoint.ok_http_statuses) : [],
             http_headers: endpoint.http_headers ? JSON.parse(endpoint.http_headers) : null,
             kafka_config: endpoint.kafka_config ? JSON.parse(endpoint.kafka_config) : null,
-            paused: Boolean(endpoint.paused), // Convert SQLite 0/1 to proper boolean
-            upside_down_mode: Boolean(endpoint.upside_down_mode), // Also fix this one
-            check_cert_expiry: Boolean(endpoint.check_cert_expiry), // And this one
-            client_cert_enabled: Boolean(endpoint.client_cert_enabled), // mTLS enabled flag
+            paused: Boolean(endpoint.paused),
+            upside_down_mode: Boolean(endpoint.upside_down_mode),
+            check_cert_expiry: Boolean(endpoint.check_cert_expiry),
+            client_cert_enabled: Boolean(endpoint.client_cert_enabled),
             current_response: lastResponse?.response_time || 0,
             avg_response_24h: stats24h?.avg_response || 0,
             uptime_24h: stats24h?.uptime || 0,
@@ -1565,7 +1219,7 @@ async function main() {
       const range = (query.range || '24h') as '3h' | '6h' | '24h' | '1w';
 
       // Get endpoint heartbeat interval for gap-aware calculation
-      const endpoint = await db.get('SELECT heartbeat_interval FROM endpoints WHERE id = ?', id);
+      const endpoint = db.query('SELECT heartbeat_interval FROM endpoints WHERE id = ?').get(id) as any;
       const heartbeatInterval = endpoint?.heartbeat_interval || 60;
 
       const rangeToPeriod = {
@@ -1624,7 +1278,7 @@ async function main() {
           break;
       }
 
-      const aggregatedData = await db.all(
+      const aggregatedData = db.query(
         `SELECT 
           ${groupByFormat} as time_bucket,
           AVG(response_time) as avg_response_time,
@@ -1641,9 +1295,8 @@ async function main() {
         FROM response_times 
         WHERE endpoint_id = ? AND created_at >= ${since}
         GROUP BY ${groupByFormat}
-        ORDER BY created_at ASC`,
-        id
-      );
+        ORDER BY created_at ASC`
+      ).all(id) as any[];
 
       // Transform the aggregated data to include min/max for banded chart
       return aggregatedData.map(row => ({
@@ -1662,14 +1315,13 @@ async function main() {
       const limit = parseInt(query.limit as string) || 50;
 
       // Get all status changes for this endpoint, ordered by time
-      const statusChanges = await db.all(
+      const statusChanges = db.query(
         `SELECT status, created_at, response_time
          FROM response_times 
          WHERE endpoint_id = ? 
          ORDER BY created_at DESC 
-         LIMIT 1000`,
-        id
-      );
+         LIMIT 1000`
+      ).all(id) as any[];
 
       const outages: Array<{
         started_at: string;
@@ -1731,15 +1383,13 @@ async function main() {
       const limit = parseInt(query.limit as string) || 24;
 
       // Get recent heartbeats for this endpoint, ordered by time (most recent first)
-      const heartbeats = await db.all(
+      const heartbeats = db.query(
         `SELECT status, created_at, response_time
          FROM response_times 
          WHERE endpoint_id = ? 
          ORDER BY created_at DESC 
-         LIMIT ?`,
-        id,
-        limit
-      );
+         LIMIT ?`
+      ).all(id, limit) as any[];
 
       // Return in chronological order (oldest first) for proper display
       return heartbeats.reverse();
@@ -1748,7 +1398,7 @@ async function main() {
       const { id } = params;
       
       // Delete all heartbeat data (response_times) for this endpoint
-      const result = await db.run('DELETE FROM response_times WHERE endpoint_id = ?', id);
+      const result = db.run('DELETE FROM response_times WHERE endpoint_id = ?', [id]);
       
       logger.info(`Deleted ${result.changes} heartbeat records for endpoint ID: ${id}`, 'DATA_MANAGEMENT');
       
@@ -1762,7 +1412,7 @@ async function main() {
       const { id } = params;
       
       // Since outages are calculated from response_times, deleting response_times clears outage history
-      const result = await db.run('DELETE FROM response_times WHERE endpoint_id = ?', id);
+      const result = db.run('DELETE FROM response_times WHERE endpoint_id = ?', [id]);
       
       logger.info(`Deleted outage history (${result.changes} response records) for endpoint ID: ${id}`, 'DATA_MANAGEMENT');
       
@@ -1781,28 +1431,24 @@ async function main() {
         kafka_topic, kafka_message, kafka_config
       } = body as Endpoint;
 
-      const result = await db.run(
+      const result = db.run(
         `INSERT INTO endpoints (
           url, name, type, status, heartbeat_interval, retries, upside_down_mode, paused,
           http_method, http_headers, http_body, ok_http_statuses, check_cert_expiry, cert_expiry_threshold, keyword_search,
           client_cert_enabled, client_cert_public_key, client_cert_private_key, client_cert_ca,
           tcp_port, kafka_topic, kafka_message, kafka_config
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        url, name || url, type, 'pending', heartbeat_interval || 60, retries || 3, upside_down_mode || false, false,
+        [url, name || url, type, 'pending', heartbeat_interval || 60, retries || 3, upside_down_mode || false, false,
         http_method || 'GET', http_headers ? JSON.stringify(http_headers) : null, http_body || null,
         ok_http_statuses ? JSON.stringify(ok_http_statuses) : null, check_cert_expiry || false, cert_expiry_threshold || 30, keyword_search || null,
         client_cert_enabled || false, client_cert_public_key || null, client_cert_private_key || null, client_cert_ca || null,
-        tcp_port, kafka_topic, kafka_message, kafka_config
+        tcp_port ?? null, kafka_topic ?? null, kafka_message ?? null, kafka_config ?? null]
       );
 
-      // Get the newly created endpoint and start monitoring
-      const newEndpoint = await db.get('SELECT * FROM endpoints WHERE id = ?', result.lastID);
-      if (newEndpoint) {
-        console.log(`Starting monitor for new endpoint "${newEndpoint.name}" (ID: ${newEndpoint.id}) with ${newEndpoint.heartbeat_interval}s interval`);
-        startEndpointMonitoring(newEndpoint as Endpoint);
-      }
+      // Get the newly created endpoint
+      const newEndpoint = db.query('SELECT * FROM endpoints WHERE id = ?').get(result.lastInsertRowid) as any;
 
-      return { id: result.lastID, url, name: name || url, status: 'pending' };
+      return { id: result.lastInsertRowid, url, name: name || url, status: 'pending' };
     }))
     .put('/api/endpoints/:id', requireRole('admin')(async ({ params, body }: any) => {
       const { id } = params;
@@ -1814,7 +1460,7 @@ async function main() {
         kafka_topic, kafka_message, kafka_config
       } = body as Endpoint;
 
-      await db.run(
+      db.run(
         `UPDATE endpoints SET 
           name = ?, url = ?, type = ?, heartbeat_interval = ?, retries = ?, upside_down_mode = ?,
           http_method = ?, http_headers = ?, http_body = ?, ok_http_statuses = ?, check_cert_expiry = ?, cert_expiry_threshold = ?, keyword_search = ?,
@@ -1829,31 +1475,19 @@ async function main() {
         id
       );
 
-      // Get the updated endpoint and restart monitoring with new settings
-      const updatedEndpoint = await db.get('SELECT * FROM endpoints WHERE id = ?', id);
-      if (updatedEndpoint) {
-        console.log(`Restarting monitor for endpoint "${updatedEndpoint.name}" (ID: ${updatedEndpoint.id}) with ${updatedEndpoint.heartbeat_interval}s interval`);
-        stopEndpointMonitoring(parseInt(id));
-        startEndpointMonitoring(updatedEndpoint as Endpoint);
-      }
-
       return { id, name, url };
     }))
     .delete('/api/endpoints/:id', requireRole('admin')(async ({ params }: any) => {
       const { id } = params;
       
-      // Stop monitoring for this endpoint
-      console.log(`Stopping monitor for endpoint ID: ${id}`);
-      stopEndpointMonitoring(parseInt(id));
-      
-      await db.run('DELETE FROM endpoints WHERE id = ?', id);
+      db.run('DELETE FROM endpoints WHERE id = ?', [id]);
       return { id };
     }))
     .post('/api/endpoints/:id/toggle-pause', requireRole('admin')(async ({ params }: any) => {
       const { id } = params;
       
       // Get current pause status
-      const endpoint = await db.get('SELECT * FROM endpoints WHERE id = ?', id);
+      const endpoint = db.query('SELECT * FROM endpoints WHERE id = ?').get(id) as any;
       if (!endpoint) {
         throw new Error('Endpoint not found');
       }
@@ -1861,25 +1495,12 @@ async function main() {
       const newPausedState = !endpoint.paused;
       
       // Update pause status in database
-      await db.run('UPDATE endpoints SET paused = ? WHERE id = ?', newPausedState, id);
-      
-      if (newPausedState) {
-        // Pausing: stop monitoring
-        console.log(`Pausing monitor for endpoint "${endpoint.name}" (ID: ${id})`);
-        stopEndpointMonitoring(parseInt(id));
-      } else {
-        // Unpausing: start monitoring
-        console.log(`Resuming monitor for endpoint "${endpoint.name}" (ID: ${id})`);
-        const updatedEndpoint = await db.get('SELECT * FROM endpoints WHERE id = ?', id);
-        if (updatedEndpoint) {
-          startEndpointMonitoring(updatedEndpoint as Endpoint);
-        }
-      }
+      db.run('UPDATE endpoints SET paused = ? WHERE id = ?', [newPausedState, id]);
       
       return { id, paused: newPausedState };
     }))
     .get('/api/notification-services', async () => {
-      const services = await db.all('SELECT * FROM notification_services');
+      const services = db.query('SELECT * FROM notification_services').all() as any[];
       return services.map(service => ({
         ...service,
         config: JSON.parse(service.config)
@@ -1887,39 +1508,27 @@ async function main() {
     })
     .post('/api/notification-services', async ({ body }) => {
       const { name, type, config } = body as { name: string, type: string, config: object };
-      const result = await db.run(
-        'INSERT INTO notification_services (name, type, config) VALUES (?, ?, ?)',
-        name,
-        type,
-        JSON.stringify(config)
-      );
-      return { id: result.lastID, name, type, config };
+      const result = db.run('INSERT INTO notification_services (name, type, config) VALUES (?, ?, ?)', [name, type, JSON.stringify(config)]);
+      return { id: result.lastInsertRowid, name, type, config };
     })
     .put('/api/notification-services/:id', async ({ params, body }) => {
       const { id } = params;
       const { name, type, config } = body as { name: string, type: string, config: object };
-      await db.run(
-        'UPDATE notification_services SET name = ?, type = ?, config = ? WHERE id = ?',
-        name,
-        type,
-        JSON.stringify(config),
-        id
-      );
+      db.run('UPDATE notification_services SET name = ?, type = ?, config = ? WHERE id = ?', [name, type, JSON.stringify(config), id]);
       return { id, name, type, config };
     })
     .delete('/api/notification-services/:id', async ({ params }) => {
       const { id } = params;
-      await db.run('DELETE FROM notification_services WHERE id = ?', id);
+      db.run('DELETE FROM notification_services WHERE id = ?', [id]);
       return { id };
     })
     .get('/api/endpoints/:id/notification-services', async ({ params }) => {
       const { id } = params;
-      const services = await db.all(
+      const services = db.query(
         `SELECT ns.* FROM notification_services ns
          JOIN monitor_notification_services mns ON ns.id = mns.notification_service_id
-         WHERE mns.monitor_id = ?`,
-        id
-      );
+         WHERE mns.monitor_id = ?`
+      ).all(id) as any[];
       return services.map(service => ({
         ...service,
         config: JSON.parse(service.config)
@@ -1928,30 +1537,175 @@ async function main() {
     .post('/api/endpoints/:id/notification-services', async ({ params, body }) => {
       const { id } = params;
       const { serviceId } = body as { serviceId: number };
-      await db.run(
-        'INSERT INTO monitor_notification_services (monitor_id, notification_service_id) VALUES (?, ?)',
-        id,
-        serviceId
-      );
+      db.run('INSERT INTO monitor_notification_services (monitor_id, notification_service_id) VALUES (?, ?)', [id, serviceId]);
       return { monitor_id: id, notification_service_id: serviceId };
     })
     .delete('/api/endpoints/:id/notification-services/:serviceId', async ({ params }) => {
       const { id, serviceId } = params;
-      await db.run(
-        'DELETE FROM monitor_notification_services WHERE monitor_id = ? AND notification_service_id = ?',
-        id,
-        serviceId
-      );
+      db.run('DELETE FROM monitor_notification_services WHERE monitor_id = ? AND notification_service_id = ?', [id, serviceId]);
       return { monitor_id: id, notification_service_id: serviceId };
     })
+    // Status Pages API
+    .get('/api/status-pages', async () => {
+      const statusPages = db.query('SELECT * FROM status_pages ORDER BY created_at DESC').all() as any[];
+      return statusPages.map(page => ({
+        ...page,
+        is_public: Boolean(page.is_public),
+        monitor_ids: JSON.parse(page.monitor_ids)
+      }));
+    })
+    .post('/api/status-pages', requireRole('admin')(async ({ body }: any) => {
+      const { name, slug, description, is_public, monitor_ids } = body as {
+        name: string;
+        slug: string;
+        description?: string;
+        is_public: boolean;
+        monitor_ids: number[];
+      };
+
+      if (!name || !slug) {
+        return new Response(JSON.stringify({ error: 'Name and slug are required' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      if (!monitor_ids || monitor_ids.length === 0) {
+        return new Response(JSON.stringify({ error: 'At least one monitor must be selected' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      // Check if slug already exists
+      const existingPage = db.query('SELECT id FROM status_pages WHERE slug = ?').get(slug) as any;
+      if (existingPage) {
+        return new Response(JSON.stringify({ error: 'Slug already exists' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      try {
+        const result = db.run(
+          'INSERT INTO status_pages (name, slug, description, is_public, monitor_ids, created_at, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)',
+          [name, slug, description || null, is_public ? 1 : 0, JSON.stringify(monitor_ids)]
+        );
+
+        const newPage = db.query('SELECT * FROM status_pages WHERE id = ?').get(result.lastInsertRowid) as any;
+        
+        logger.info(`Created status page "${name}" with slug "${slug}"`, 'STATUS_PAGES');
+
+        return {
+          ...newPage,
+          is_public: Boolean(newPage.is_public),
+          monitor_ids: JSON.parse(newPage.monitor_ids)
+        };
+      } catch (error) {
+        logger.error(`Failed to create status page: ${error}`, 'STATUS_PAGES');
+        return new Response(JSON.stringify({ error: 'Failed to create status page' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }))
+    .put('/api/status-pages/:id', requireRole('admin')(async ({ params, body }: any) => {
+      const { id } = params;
+      const { name, slug, description, is_public, monitor_ids } = body as {
+        name: string;
+        slug: string;
+        description?: string;
+        is_public: boolean;
+        monitor_ids: number[];
+      };
+
+      if (!name || !slug) {
+        return new Response(JSON.stringify({ error: 'Name and slug are required' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      if (!monitor_ids || monitor_ids.length === 0) {
+        return new Response(JSON.stringify({ error: 'At least one monitor must be selected' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      // Check if page exists
+      const existingPage = db.query('SELECT * FROM status_pages WHERE id = ?').get(id) as any;
+      if (!existingPage) {
+        return new Response(JSON.stringify({ error: 'Status page not found' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      // Check if slug already exists (but allow the same slug if it's the current page)
+      const slugExists = db.query('SELECT id FROM status_pages WHERE slug = ? AND id != ?').get(slug, id) as any;
+      if (slugExists) {
+        return new Response(JSON.stringify({ error: 'Slug already exists' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      try {
+        db.run(
+          'UPDATE status_pages SET name = ?, slug = ?, description = ?, is_public = ?, monitor_ids = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+          [name, slug, description || null, is_public ? 1 : 0, JSON.stringify(monitor_ids), id]
+        );
+
+        const updatedPage = db.query('SELECT * FROM status_pages WHERE id = ?').get(id) as any;
+        
+        logger.info(`Updated status page "${name}" (ID: ${id})`, 'STATUS_PAGES');
+
+        return {
+          ...updatedPage,
+          is_public: Boolean(updatedPage.is_public),
+          monitor_ids: JSON.parse(updatedPage.monitor_ids)
+        };
+      } catch (error) {
+        logger.error(`Failed to update status page: ${error}`, 'STATUS_PAGES');
+        return new Response(JSON.stringify({ error: 'Failed to update status page' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }))
+    .delete('/api/status-pages/:id', requireRole('admin')(async ({ params }: any) => {
+      const { id } = params;
+
+      // Check if page exists
+      const existingPage = db.query('SELECT name FROM status_pages WHERE id = ?').get(id) as any;
+      if (!existingPage) {
+        return new Response(JSON.stringify({ error: 'Status page not found' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      try {
+        db.run('DELETE FROM status_pages WHERE id = ?', [id]);
+        
+        logger.info(`Deleted status page "${existingPage.name}" (ID: ${id})`, 'STATUS_PAGES');
+
+        return { success: true };
+      } catch (error) {
+        logger.error(`Failed to delete status page: ${error}`, 'STATUS_PAGES');
+        return new Response(JSON.stringify({ error: 'Failed to delete status page' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }))
     .get('/api/logs', async () => {
-      const logs = await db.all(
-        'SELECT * FROM application_logs ORDER BY timestamp DESC LIMIT 1000'
-      );
+      const logs = db.query('SELECT * FROM application_logs ORDER BY timestamp DESC LIMIT 1000').all() as any[];
       return logs;
     })
     .delete('/api/logs', async () => {
-      await db.run('DELETE FROM application_logs');
+      db.run('DELETE FROM application_logs');
       return { success: true };
     })
     .get('/api/logs/level', async () => {
@@ -1965,194 +1719,263 @@ async function main() {
       return { level };
     })
     .get('/api/database/stats', async () => {
-      // Get database file size
-      const dbFile = Bun.file('./db.sqlite');
-      const fileSize = (await dbFile.size) / 1024 / 1024; // Convert to MB
-      
-      // Get table information
-      const tables = await db.all(`
-        SELECT 
-          name,
-          (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=m.name) as table_count
-        FROM sqlite_master m WHERE type='table' AND name NOT LIKE 'sqlite_%'
-      `);
-      
-      const tableStats = await Promise.all(
-        tables.map(async (table) => {
-          const count = await db.get(`SELECT COUNT(*) as count FROM ${table.name}`);
-          return {
-            name: table.name,
-            rows: count.count,
-            size: 'N/A' // SQLite doesn't easily provide per-table sizes
-          };
-        })
-      );
+      try {
+        // Get database file size
+        const dbFile = Bun.file(DB_PATH);
+        const dbSizeBytes = await dbFile.size;
+        const dbSizeMB = (dbSizeBytes / (1024 * 1024)).toFixed(2);
+        
+        // Get table information
+        const tables = db.query(`
+          SELECT name 
+          FROM sqlite_master 
+          WHERE type='table' AND name NOT LIKE 'sqlite_%'
+          ORDER BY name
+        `).all() as any[];
 
-      return {
-        size: `${fileSize.toFixed(2)} MB`,
-        tables: tableStats
-      };
+        const tableStats = tables.map(table => {
+          try {
+            // Get row count for each table
+            const rowCount = db.query(`SELECT COUNT(*) as count FROM "${table.name}"`).get() as any;
+            
+            // Calculate approximate table size (this is an estimation)
+            // SQLite doesn't provide exact table sizes easily, so we estimate based on page count
+            const tableInfo = db.query(`PRAGMA table_info("${table.name}")`).all() as any[];
+            const avgRowSize = tableInfo.length * 50; // Rough estimate: 50 bytes per column
+            const estimatedSizeBytes = rowCount.count * avgRowSize;
+            const estimatedSizeKB = (estimatedSizeBytes / 1024).toFixed(2);
+            const estimatedSizeKBNum = parseFloat(estimatedSizeKB);
+            
+            return {
+              name: table.name,
+              rows: rowCount.count,
+              size: estimatedSizeKBNum < 1024 ? `${estimatedSizeKB} KB` : `${(estimatedSizeBytes / (1024 * 1024)).toFixed(2)} MB`
+            };
+          } catch (err) {
+            // If there's an error querying a specific table, return minimal info
+            return {
+              name: table.name,
+              rows: 0,
+              size: '0 KB'
+            };
+          }
+        });
+
+        const dbSizeMBNum = parseFloat(dbSizeMB);
+        return {
+          size: dbSizeMBNum < 1024 ? `${dbSizeMB} MB` : `${(dbSizeBytes / (1024 * 1024 * 1024)).toFixed(2)} GB`,
+          tables: tableStats
+        };
+      } catch (error) {
+        logger.error(`Error getting database stats: ${error}`, 'DATABASE');
+        return {
+          size: 'Unknown',
+          tables: []
+        };
+      }
     })
     .post('/api/database/vacuum', async () => {
       try {
-        await db.exec('VACUUM');
-        return { success: true };
+        // Run VACUUM command to optimize database
+        db.exec('VACUUM');
+        logger.info('Database vacuum completed successfully', 'DATABASE');
+        return { success: true, message: 'Database vacuum completed successfully' };
       } catch (error) {
-        throw new Error('Failed to vacuum database');
+        logger.error(`Database vacuum failed: ${error}`, 'DATABASE');
+        throw new Error(`Database vacuum failed: ${error}`);
       }
     })
-    // Status Pages API
-    .get('/api/status-pages', async () => {
-      const statusPages = await db.all('SELECT * FROM status_pages ORDER BY created_at DESC');
-      return statusPages.map(page => ({
-        ...page,
-        monitor_ids: JSON.parse(page.monitor_ids),
-        is_public: Boolean(page.is_public)
-      }));
-    })
-    .post('/api/status-pages', async ({ body }) => {
-      const { name, slug, description, is_public, monitor_ids } = body as {
-        name: string;
-        slug: string;
-        description?: string;
-        is_public: boolean;
-        monitor_ids: number[];
-      };
-
-      // Check if slug already exists
-      const existingPage = await db.get('SELECT id FROM status_pages WHERE slug = ?', slug);
-      if (existingPage) {
-        throw new Error('A status page with this slug already exists');
-      }
-
-      const result = await db.run(
-        'INSERT INTO status_pages (name, slug, description, is_public, monitor_ids) VALUES (?, ?, ?, ?, ?)',
-        name,
-        slug,
-        description || null,
-        is_public,
-        JSON.stringify(monitor_ids)
-      );
-
-      const newPage = await db.get('SELECT * FROM status_pages WHERE id = ?', result.lastID);
-      return {
-        ...newPage,
-        monitor_ids: JSON.parse(newPage.monitor_ids),
-        is_public: Boolean(newPage.is_public)
-      };
-    })
-    .put('/api/status-pages/:id', async ({ params, body }) => {
-      const { id } = params;
-      const { name, slug, description, is_public, monitor_ids } = body as {
-        name: string;
-        slug: string;
-        description?: string;
-        is_public: boolean;
-        monitor_ids: number[];
-      };
-
-      // Check if slug already exists for a different page
-      const existingPage = await db.get('SELECT id FROM status_pages WHERE slug = ? AND id != ?', slug, id);
-      if (existingPage) {
-        throw new Error('A status page with this slug already exists');
-      }
-
-      await db.run(
-        'UPDATE status_pages SET name = ?, slug = ?, description = ?, is_public = ?, monitor_ids = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-        name,
-        slug,
-        description || null,
-        is_public,
-        JSON.stringify(monitor_ids),
-        id
-      );
-
-      const updatedPage = await db.get('SELECT * FROM status_pages WHERE id = ?', id);
-      return {
-        ...updatedPage,
-        monitor_ids: JSON.parse(updatedPage.monitor_ids),
-        is_public: Boolean(updatedPage.is_public)
-      };
-    })
-    .delete('/api/status-pages/:id', async ({ params }) => {
-      const { id } = params;
-      await db.run('DELETE FROM status_pages WHERE id = ?', id);
-      return { success: true };
-    })
-    .get('/api/status-pages/public/:slug', async ({ params }) => {
+    // Public status page endpoint
+    .get('/api/status/:slug', async ({ params }) => {
       const { slug } = params;
-      
-      const statusPage = await db.get('SELECT * FROM status_pages WHERE slug = ? AND is_public = 1', slug);
+
+      // Get status page
+      const statusPage = db.query('SELECT * FROM status_pages WHERE slug = ? AND is_public = 1').get(slug) as any;
       if (!statusPage) {
-        throw new Error('Status page not found');
+        return new Response(JSON.stringify({ error: 'Status page not found' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' }
+        });
       }
 
-      return {
-        ...statusPage,
-        monitor_ids: JSON.parse(statusPage.monitor_ids),
-        is_public: Boolean(statusPage.is_public)
-      };
-    })
-    .get('/api/status-pages/:id/monitors', async ({ params }) => {
-      const { id } = params;
-      
-      const statusPage = await db.get('SELECT monitor_ids FROM status_pages WHERE id = ?', id);
-      if (!statusPage) {
-        throw new Error('Status page not found');
-      }
-
+      // Get monitors for this status page
       const monitorIds = JSON.parse(statusPage.monitor_ids);
-      if (monitorIds.length === 0) {
-        return [];
-      }
+      const monitors = await Promise.all(
+        monitorIds.map(async (id: number) => {
+          const endpoint = db.query('SELECT * FROM endpoints WHERE id = ?').get(id) as any;
+          if (!endpoint) return null;
 
-      // Get the monitors for this status page
-      const placeholders = monitorIds.map(() => '?').join(',');
-      const monitors = await db.all(
-        `SELECT * FROM endpoints WHERE id IN (${placeholders})`,
-        ...monitorIds
-      );
-
-      // Add stats for each monitor
-      const monitorsWithStats = await Promise.all(
-        monitors.map(async (monitor) => {
-          const lastResponse = await db.get(
-            'SELECT response_time FROM response_times WHERE endpoint_id = ? ORDER BY created_at DESC LIMIT 1',
-            monitor.id
-          );
-
-          const stats24h = await calculateGapAwareUptime(db, monitor.id, monitor.heartbeat_interval || 60, '1 day');
+          // Get recent stats for public display
+          const stats24h = await calculateGapAwareUptime(db, endpoint.id, endpoint.heartbeat_interval || 60, '1 day');
+          const stats30d = await calculateGapAwareUptime(db, endpoint.id, endpoint.heartbeat_interval || 60, '30 days');
 
           return {
-            ...monitor,
-            ok_http_statuses: monitor.ok_http_statuses ? JSON.parse(monitor.ok_http_statuses) : [],
-            http_headers: monitor.http_headers ? JSON.parse(monitor.http_headers) : null,
-            kafka_config: monitor.kafka_config ? JSON.parse(monitor.kafka_config) : null,
-            paused: Boolean(monitor.paused),
-            upside_down_mode: Boolean(monitor.upside_down_mode),
-            check_cert_expiry: Boolean(monitor.check_cert_expiry),
-            client_cert_enabled: Boolean(monitor.client_cert_enabled),
-            current_response: lastResponse?.response_time || 0,
-            avg_response_24h: stats24h?.avg_response || 0,
+            id: endpoint.id,
+            name: endpoint.name,
+            url: endpoint.url,
+            status: endpoint.status,
             uptime_24h: stats24h?.uptime || 0,
+            uptime_30d: stats30d?.uptime || 0,
+            last_checked: endpoint.last_checked
           };
         })
       );
 
-      return monitorsWithStats;
+      return {
+        ...statusPage,
+        is_public: Boolean(statusPage.is_public),
+        monitor_ids: monitorIds,
+        monitors: monitors.filter(m => m !== null)
+      };
     })
-    .get('/*', async ({ request }) => {
+    .get('/*', async ({ request, set }) => {
       const url = new URL(request.url);
       const assetPath = url.pathname === '/' ? 'index.html' : url.pathname.substring(1);
       const filePath = path.join(import.meta.dir, '..', 'frontend', 'dist', assetPath);
 
       const file = Bun.file(filePath);
+      
       if (await file.exists()) {
+        try {
+          const stats = await stat(filePath);
+          const lastModified = stats.mtime.toUTCString();
+          const etag = `"${createHash('md5').update(`${stats.size}-${stats.mtime.getTime()}`).digest('hex')}"`;
+          
+          // Check if client has cached version (304 Not Modified)
+          const ifNoneMatch = request.headers.get('if-none-match');
+          const ifModifiedSince = request.headers.get('if-modified-since');
+          
+          if (ifNoneMatch === etag || ifModifiedSince === lastModified) {
+            set.status = 304;
+            return new Response(null, { status: 304 });
+          }
+          
+          // Determine file type and set appropriate cache headers and Content-Type
+          const ext = path.extname(filePath).toLowerCase();
+          let cacheControl: string;
+          let contentType: string;
+          
+          // Set Content-Type based on file extension
+          switch (ext) {
+            case '.html':
+              contentType = 'text/html; charset=utf-8';
+              break;
+            case '.css':
+              contentType = 'text/css; charset=utf-8';
+              break;
+            case '.js':
+              contentType = 'application/javascript; charset=utf-8';
+              break;
+            case '.json':
+              contentType = 'application/json; charset=utf-8';
+              break;
+            case '.png':
+              contentType = 'image/png';
+              break;
+            case '.jpg':
+            case '.jpeg':
+              contentType = 'image/jpeg';
+              break;
+            case '.gif':
+              contentType = 'image/gif';
+              break;
+            case '.svg':
+              contentType = 'image/svg+xml; charset=utf-8';
+              break;
+            case '.ico':
+              contentType = 'image/x-icon';
+              break;
+            case '.webp':
+              contentType = 'image/webp';
+              break;
+            case '.woff':
+              contentType = 'font/woff';
+              break;
+            case '.woff2':
+              contentType = 'font/woff2';
+              break;
+            case '.ttf':
+              contentType = 'font/ttf';
+              break;
+            case '.eot':
+              contentType = 'application/vnd.ms-fontobject';
+              break;
+            case '.xml':
+              contentType = 'application/xml; charset=utf-8';
+              break;
+            case '.txt':
+              contentType = 'text/plain; charset=utf-8';
+              break;
+            default:
+              contentType = 'application/octet-stream';
+          }
+          
+          if (['.js', '.css', '.woff', '.woff2', '.ttf', '.eot'].includes(ext)) {
+            // Long cache for hashed assets (1 year)
+            cacheControl = 'public, max-age=31536000, immutable';
+          } else if (['.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp'].includes(ext)) {
+            // Medium cache for images (1 week)
+            cacheControl = 'public, max-age=604800';
+          } else {
+            // Short cache for HTML and other files (1 hour)
+            cacheControl = 'public, max-age=3600';
+          }
+          
+          // Set security and performance headers
+          const headers: Record<string, string> = {
+            'Content-Type': contentType,
+            'Cache-Control': cacheControl,
+            'ETag': etag,
+            'Last-Modified': lastModified,
+            'X-Content-Type-Options': 'nosniff',
+            'X-Frame-Options': 'DENY',
+            'X-XSS-Protection': '1; mode=block'
+          };
+          
+          // Add compression for text-based files
+          const acceptEncoding = request.headers.get('accept-encoding') || '';
+          const isCompressible = ['.js', '.css', '.html', '.json', '.xml', '.txt', '.svg'].includes(ext);
+          
+          if (isCompressible && acceptEncoding.includes('gzip')) {
+            try {
+              const fileContent = await file.arrayBuffer();
+              const compressed = gzipSync(new Uint8Array(fileContent));
+              headers['Content-Encoding'] = 'gzip';
+              headers['Content-Length'] = compressed.length.toString();
+              
+              return new Response(compressed, { headers });
+            } catch (compressionError) {
+              // Fall back to uncompressed if compression fails
+              console.warn('Compression failed, serving uncompressed:', compressionError);
+            }
+          }
+          
+          return new Response(file, { headers });
+        } catch (error) {
+          // If stat fails, serve file without caching headers
+          console.warn('Failed to get file stats, serving without optimization:', error);
           return file;
+        }
       }
 
+      // Fallback to index.html for SPA routing (with appropriate headers)
       const indexPath = path.join(import.meta.dir, '..', 'frontend', 'dist', 'index.html');
-      return Bun.file(indexPath);
+      const indexFile = Bun.file(indexPath);
+      
+      if (await indexFile.exists()) {
+        const headers = {
+          'Cache-Control': 'public, max-age=3600',
+          'X-Content-Type-Options': 'nosniff',
+          'X-Frame-Options': 'DENY',
+          'X-XSS-Protection': '1; mode=block'
+        };
+        
+        return new Response(indexFile, { headers });
+      }
+      
+      // Final fallback - 404
+      set.status = 404;
+      return new Response('Not Found', { status: 404 });
     })
     .listen(3001);
 
@@ -2165,6 +1988,12 @@ async function main() {
 
   // Function to check a single endpoint
   const checkSingleEndpoint = async (endpoint: Endpoint) => {
+    // Skip if endpoint is paused
+    if (endpoint.paused) {
+      logger.debug(`Skipping paused endpoint "${endpoint.name}" (ID: ${endpoint.id})`, 'MONITORING');
+      return;
+    }
+
     const startTime = Date.now();
     let isOk = false;
     let responseTime = 0;
@@ -2183,8 +2012,6 @@ async function main() {
                 }
               }
             } catch (err) {
-              // Certificate checking failed, but this should not affect endpoint monitoring
-              // Just log as info since this is not critical for the main monitoring functionality
               console.info(`Could not check SSL certificate for ${endpoint.url} - this is normal for sites with certificate issues`);
             }
           }
@@ -2204,7 +2031,7 @@ async function main() {
               port: url.port || 443,
               path: url.pathname + url.search,
               method,
-              headers,
+              headers: headers as any,
               agent,
             };
 
@@ -2352,25 +2179,33 @@ async function main() {
 
       if (isOk) {
         if (endpoint.status !== 'UP') {
+          logger.info(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) recovered - status changed from ${endpoint.status} to UP`, 'MONITORING');
           sendNotification(endpoint, 'UP');
+        } else {
+          logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) check successful - response time: ${responseTime}ms`, 'MONITORING');
         }
-        await db.run('UPDATE endpoints SET status = ?, failed_attempts = 0, last_checked = CURRENT_TIMESTAMP WHERE id = ?', 'UP', endpoint.id);
-        await db.run('INSERT INTO response_times (endpoint_id, response_time, status) VALUES (?, ?, ?)', endpoint.id, responseTime, 'UP');
+        db.run('UPDATE endpoints SET status = ?, failed_attempts = 0, last_checked = CURRENT_TIMESTAMP WHERE id = ?', ['UP', endpoint.id]);
+        db.run('INSERT INTO response_times (endpoint_id, response_time, status) VALUES (?, ?, ?)', [endpoint.id, responseTime, 'UP']);
       } else {
         throw new Error('Check failed');
       }
     } catch (error) {
       responseTime = responseTime || (Date.now() - startTime);
       const newFailedAttempts = (endpoint.failed_attempts || 0) + 1;
+      
       if (newFailedAttempts >= (endpoint.retries || 3)) {
         if (endpoint.status !== 'DOWN') {
+          logger.error(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) failed after ${newFailedAttempts} attempts - status changed to DOWN. Error: ${error}`, 'MONITORING');
           sendNotification(endpoint, 'DOWN');
+        } else {
+          logger.warn(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) check failed (attempt ${newFailedAttempts}). Error: ${error}`, 'MONITORING');
         }
-        await db.run('UPDATE endpoints SET status = ?, failed_attempts = ?, last_checked = CURRENT_TIMESTAMP WHERE id = ?', 'DOWN', newFailedAttempts, endpoint.id);
+        db.run('UPDATE endpoints SET status = ?, failed_attempts = ?, last_checked = CURRENT_TIMESTAMP WHERE id = ?', ['DOWN', newFailedAttempts, endpoint.id]);
       } else {
-        await db.run('UPDATE endpoints SET failed_attempts = ?, last_checked = CURRENT_TIMESTAMP WHERE id = ?', newFailedAttempts, endpoint.id);
+        logger.warn(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) check failed (attempt ${newFailedAttempts}/${endpoint.retries}). Error: ${error}`, 'MONITORING');
+        db.run('UPDATE endpoints SET failed_attempts = ?, last_checked = CURRENT_TIMESTAMP WHERE id = ?', [newFailedAttempts, endpoint.id]);
       }
-      await db.run('INSERT INTO response_times (endpoint_id, response_time, status) VALUES (?, ?, ?)', endpoint.id, responseTime, 'DOWN');
+      db.run('INSERT INTO response_times (endpoint_id, response_time, status) VALUES (?, ?, ?)', [endpoint.id, responseTime, 'DOWN']);
     }
   };
 
@@ -2383,7 +2218,7 @@ async function main() {
 
     // Don't start monitoring if endpoint is paused
     if (endpoint.paused) {
-      console.log(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) is paused - skipping monitoring`);
+      logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) is paused - skipping monitoring`, 'MONITORING');
       return;
     }
 
@@ -2391,16 +2226,16 @@ async function main() {
       const timer = setTimeout(async () => {
         try {
           // Check if endpoint is still not paused before running check
-          const currentEndpoint = await db.get('SELECT paused FROM endpoints WHERE id = ?', endpoint.id);
+          const currentEndpoint = db.query('SELECT paused FROM endpoints WHERE id = ?').get(endpoint.id) as any;
           if (!currentEndpoint?.paused) {
             await checkSingleEndpoint(endpoint);
           } else {
-            console.log(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) was paused - stopping monitoring`);
+            logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) was paused - stopping monitoring`, 'MONITORING');
             stopEndpointMonitoring(endpoint.id);
             return;
           }
         } catch (err) {
-          console.error(`Error checking endpoint ${endpoint.id} (${endpoint.name}):`, err);
+          logger.error(`Error checking endpoint ${endpoint.id} (${endpoint.name}): ${err}`, 'MONITORING');
         }
         // Schedule the next check
         scheduleCheck();
@@ -2412,15 +2247,15 @@ async function main() {
     // Start the first check immediately, then schedule subsequent checks
     setTimeout(async () => {
       try {
-        const currentEndpoint = await db.get('SELECT paused FROM endpoints WHERE id = ?', endpoint.id);
+        const currentEndpoint = db.query('SELECT paused FROM endpoints WHERE id = ?').get(endpoint.id) as any;
         if (!currentEndpoint?.paused) {
           await checkSingleEndpoint(endpoint);
         } else {
-          console.log(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) was paused - not starting monitoring`);
+          logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) was paused - not starting monitoring`, 'MONITORING');
           return;
         }
       } catch (err) {
-        console.error(`Error in initial check for endpoint ${endpoint.id} (${endpoint.name}):`, err);
+        logger.error(`Error in initial check for endpoint ${endpoint.id} (${endpoint.name}): ${err}`, 'MONITORING');
       }
       // Schedule subsequent checks
       scheduleCheck();
@@ -2432,13 +2267,14 @@ async function main() {
     if (endpointTimers.has(endpointId)) {
       clearTimeout(endpointTimers.get(endpointId)!);
       endpointTimers.delete(endpointId);
+      logger.debug(`Stopped monitoring for endpoint ID: ${endpointId}`, 'MONITORING');
     }
   };
 
   // Initialize monitoring for all existing endpoints
   const initializeMonitoring = async () => {
     try {
-      const endpoints: Endpoint[] = await db.all('SELECT * FROM endpoints');
+      const endpoints: Endpoint[] = db.query('SELECT * FROM endpoints').all() as Endpoint[];
       logger.info(`Starting monitoring for ${endpoints.length} endpoints`, 'MONITORING');
       
       for (const endpoint of endpoints) {

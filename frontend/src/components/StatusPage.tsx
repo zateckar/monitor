@@ -4,12 +4,12 @@ import {
   Typography,
   Paper,
   Chip,
-  Grid,
   LinearProgress,
   Alert,
   Container,
   Card,
   CardContent,
+  Stack,
 } from '@mui/material';
 import { green, orange, red, grey } from '@mui/material/colors';
 import type { Endpoint, Heartbeat, StatusPage as StatusPageType } from '../types';
@@ -35,8 +35,8 @@ const StatusPage: React.FC<StatusPageProps> = ({ slug }) => {
       setLoading(true);
       setError(null);
 
-      // Fetch status page details
-      const statusResponse = await fetch(`http://localhost:3001/api/status-pages/public/${slug}`);
+      // Fetch status page details and monitors
+      const statusResponse = await fetch(`/api/status/${slug}`);
       if (!statusResponse.ok) {
         if (statusResponse.status === 404) {
           throw new Error('Status page not found');
@@ -45,22 +45,15 @@ const StatusPage: React.FC<StatusPageProps> = ({ slug }) => {
       }
       const statusData = await statusResponse.json();
       setStatusPage(statusData);
-
-      // Fetch monitors for this status page
-      const monitorsResponse = await fetch(`http://localhost:3001/api/status-pages/${statusData.id}/monitors`);
-      if (!monitorsResponse.ok) {
-        throw new Error('Failed to fetch monitors');
-      }
-      const monitorsData = await monitorsResponse.json();
-      setMonitors(monitorsData);
+      setMonitors(statusData.monitors || []);
 
       // Fetch heartbeats for each monitor
       const heartbeatsData: Record<number, Heartbeat[]> = {};
       await Promise.all(
-        monitorsData.map(async (monitor: Endpoint) => {
+        (statusData.monitors || []).map(async (monitor: Endpoint) => {
           try {
             const heartbeatsResponse = await fetch(
-              `http://localhost:3001/api/endpoints/${monitor.id}/heartbeats?limit=60`
+              `/api/endpoints/${monitor.id}/heartbeats?limit=60`
             );
             if (heartbeatsResponse.ok) {
               heartbeatsData[Number(monitor.id)] = await heartbeatsResponse.json();
@@ -256,51 +249,49 @@ const StatusPage: React.FC<StatusPageProps> = ({ slug }) => {
       </Paper>
 
       {/* Monitors */}
-      <Grid container spacing={3}>
+      <Stack spacing={3}>
         {monitors.map((monitor) => (
-          <Grid item xs={12} key={monitor.id}>
-            <Card>
-              <CardContent>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-                  <Box>
-                    <Typography variant="h6" gutterBottom>
-                      {monitor.name}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {monitor.url}
-                    </Typography>
-                  </Box>
-                  <Box sx={{ textAlign: 'right' }}>
-                    <Chip
-                      label={getStatusLabel(monitor.status)}
-                      sx={{
-                        backgroundColor: getStatusColor(monitor.status),
-                        color: 'white',
-                        mb: 1,
-                      }}
-                    />
-                    <Typography variant="body2" color="text.secondary">
-                      Last checked: {formatLastUpdate(monitor.last_checked)}
-                    </Typography>
-                  </Box>
-                </Box>
-
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                  <Typography variant="body2">
-                    24h Uptime: <strong>{formatUptime(monitor.uptime_24h || 0)}</strong>
+          <Card key={monitor.id}>
+            <CardContent>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+                <Box>
+                  <Typography variant="h6" gutterBottom>
+                    {monitor.name}
                   </Typography>
-                  <Typography variant="body2">
-                    Avg Response: <strong>{Math.round(monitor.avg_response_24h || 0)}ms</strong>
+                  <Typography variant="body2" color="text.secondary">
+                    {monitor.url}
                   </Typography>
                 </Box>
+                <Box sx={{ textAlign: 'right' }}>
+                  <Chip
+                    label={getStatusLabel(monitor.status)}
+                    sx={{
+                      backgroundColor: getStatusColor(monitor.status),
+                      color: 'white',
+                      mb: 1,
+                    }}
+                  />
+                  <Typography variant="body2" color="text.secondary">
+                    Last checked: {formatLastUpdate(monitor.last_checked)}
+                  </Typography>
+                </Box>
+              </Box>
 
-                {/* Heartbeats visualization */}
-                {renderHeartbeats(heartbeats[Number(monitor.id)] || [])}
-              </CardContent>
-            </Card>
-          </Grid>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                <Typography variant="body2">
+                  24h Uptime: <strong>{formatUptime(monitor.uptime_24h || 0)}</strong>
+                </Typography>
+                <Typography variant="body2">
+                  Avg Response: <strong>{Math.round(monitor.avg_response_24h || 0)}ms</strong>
+                </Typography>
+              </Box>
+
+              {/* Heartbeats visualization */}
+              {renderHeartbeats(heartbeats[Number(monitor.id)] || [])}
+            </CardContent>
+          </Card>
         ))}
-      </Grid>
+      </Stack>
 
       {monitors.length === 0 && (
         <Paper sx={{ p: 4, textAlign: 'center' }}>

@@ -45,12 +45,13 @@ const OIDCSettings: React.FC = () => {
     client_id: '',
     client_secret: '',
     scopes: 'openid profile email',
+    redirect_base_url: 'http://localhost:3001',
     is_active: true,
   });
 
   const fetchProviders = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/admin/oidc-providers', {
+      const response = await fetch('/api/admin/oidc-providers', {
         credentials: 'include',
       });
       
@@ -80,6 +81,7 @@ const OIDCSettings: React.FC = () => {
         client_id: provider.client_id,
         client_secret: provider.client_secret,
         scopes: provider.scopes,
+        redirect_base_url: provider.redirect_base_url,
         is_active: provider.is_active,
       });
     } else {
@@ -90,6 +92,7 @@ const OIDCSettings: React.FC = () => {
         client_id: '',
         client_secret: '',
         scopes: 'openid profile email',
+        redirect_base_url: 'http://localhost:3001',
         is_active: true,
       });
     }
@@ -108,8 +111,8 @@ const OIDCSettings: React.FC = () => {
   const handleSave = async () => {
     try {
       const url = editingProvider
-        ? `http://localhost:3001/api/admin/oidc-providers/${editingProvider.id}`
-        : 'http://localhost:3001/api/admin/oidc-providers';
+        ? `/api/admin/oidc-providers/${editingProvider.id}`
+        : '/api/admin/oidc-providers';
       
       const method = editingProvider ? 'PUT' : 'POST';
       
@@ -141,7 +144,7 @@ const OIDCSettings: React.FC = () => {
     }
 
     try {
-      const response = await fetch(`http://localhost:3001/api/admin/oidc-providers/${provider.id}`, {
+      const response = await fetch(`/api/admin/oidc-providers/${provider.id}`, {
         method: 'DELETE',
         credentials: 'include',
       });
@@ -327,6 +330,15 @@ const OIDCSettings: React.FC = () => {
               onChange={(e) => handleInputChange('scopes', e.target.value)}
               required
               helperText="Space-separated list of OAuth 2.0 scopes (default: openid profile email)"
+            />
+
+            <TextField
+              fullWidth
+              label="Redirect Base URL"
+              value={formData.redirect_base_url}
+              onChange={(e) => handleInputChange('redirect_base_url', e.target.value)}
+              required
+              helperText="The base URL where this application is accessible (e.g., https://monitoring.example.com)"
             />
 
             <FormControlLabel

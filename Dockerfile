@@ -2,13 +2,6 @@
 FROM oven/bun:1 AS base
 WORKDIR /app
 
-# Install system dependencies needed for native modules
-RUN apt-get update && apt-get install -y \
-    python3 \
-    make \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
 # Copy package files
 COPY package.json ./
 COPY backend/package.json ./backend/
@@ -21,9 +14,6 @@ RUN cd backend && bun install --frozen-lockfile
 # Copy source code
 COPY frontend/ ./frontend/
 COPY backend/ ./backend/
-
-# Build frontend
-RUN cd frontend && bun run build
 
 # Create data directory for SQLite database
 RUN mkdir -p /app/data
