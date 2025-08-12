@@ -1,0 +1,33 @@
+[build]
+target = "browser"
+minify = true
+splitting = true
+sourcemap = false
+outdir = "dist"
+entrypoints = ["src/main.tsx"]
+root = "."
+publicPath = "/"
+
+[build.define]
+"process.env.NODE_ENV" = '"production"'
+
+[build.loader]
+".tsx" = "tsx"
+".ts" = "ts"
+".jsx" = "jsx"
+".js" = "js"
+".css" = "css"
+".svg" = "file"
+".png" = "file"
+".jpg" = "file"
+".jpeg" = "file"
+".gif" = "file"
+".ico" = "file"
+".woff" = "file"
+".woff2" = "file"
+".ttf" = "file"
+".eot" = "file"
+
+[build.external]
+# External packages that should not be bundled
+# Add any packages here that should remain external

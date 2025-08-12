@@ -14,6 +14,7 @@ import {
 import { green, orange, red, grey } from '@mui/material/colors';
 import type { Endpoint, Heartbeat, StatusPage as StatusPageType } from '../types';
 import { formatDateTime, formatCurrentDateTime } from '../utils/timezone';
+import { updateFavicon, checkMonitorStatus } from '../utils/favicon';
 
 interface StatusPageProps {
   slug: string;
@@ -27,50 +28,56 @@ const StatusPage: React.FC<StatusPageProps> = ({ slug }) => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    const fetchStatusPage = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        // Fetch status page details and monitors
+        const statusResponse = await fetch(`/api/status/${slug}`);
+        if (!statusResponse.ok) {
+          if (statusResponse.status === 404) {
+            throw new Error('Status page not found');
+          }
+          throw new Error('Failed to fetch status page');
+        }
+        const statusData = await statusResponse.json();
+        setStatusPage(statusData);
+        setMonitors(statusData.monitors || []);
+
+        // Fetch heartbeats for each monitor
+        const heartbeatsData: Record<number, Heartbeat[]> = {};
+        await Promise.all(
+          (statusData.monitors || []).map(async (monitor: Endpoint) => {
+            try {
+              const heartbeatsResponse = await fetch(
+                `/api/endpoints/${monitor.id}/heartbeats?limit=60`
+              );
+              if (heartbeatsResponse.ok) {
+                heartbeatsData[Number(monitor.id)] = await heartbeatsResponse.json();
+              }
+            } catch (err) {
+              console.error(`Failed to fetch heartbeats for monitor ${monitor.id}:`, err);
+              heartbeatsData[Number(monitor.id)] = [];
+            }
+          })
+        );
+        setHeartbeats(heartbeatsData);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load status page');
+      } finally {
+        setLoading(false);
+      }
+    };
+
     fetchStatusPage();
   }, [slug]);
 
-  const fetchStatusPage = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      // Fetch status page details and monitors
-      const statusResponse = await fetch(`/api/status/${slug}`);
-      if (!statusResponse.ok) {
-        if (statusResponse.status === 404) {
-          throw new Error('Status page not found');
-        }
-        throw new Error('Failed to fetch status page');
-      }
-      const statusData = await statusResponse.json();
-      setStatusPage(statusData);
-      setMonitors(statusData.monitors || []);
-
-      // Fetch heartbeats for each monitor
-      const heartbeatsData: Record<number, Heartbeat[]> = {};
-      await Promise.all(
-        (statusData.monitors || []).map(async (monitor: Endpoint) => {
-          try {
-            const heartbeatsResponse = await fetch(
-              `/api/endpoints/${monitor.id}/heartbeats?limit=60`
-            );
-            if (heartbeatsResponse.ok) {
-              heartbeatsData[Number(monitor.id)] = await heartbeatsResponse.json();
-            }
-          } catch (err) {
-            console.error(`Failed to fetch heartbeats for monitor ${monitor.id}:`, err);
-            heartbeatsData[Number(monitor.id)] = [];
-          }
-        })
-      );
-      setHeartbeats(heartbeatsData);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load status page');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Update favicon based on monitor status
+  useEffect(() => {
+    const hasFailed = checkMonitorStatus(monitors);
+    updateFavicon(hasFailed);
+  }, [monitors]);
 
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {

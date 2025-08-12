@@ -61,7 +61,7 @@ const UserManagement: React.FC = () => {
       } else {
         setError('Failed to load users');
       }
-    } catch (err) {
+    } catch (error) {
       setError('Error loading users');
     } finally {
       setLoading(false);
@@ -87,7 +87,7 @@ const UserManagement: React.FC = () => {
         const data = await response.json();
         setError(data.error || 'Failed to create user');
       }
-    } catch (err) {
+    } catch (error) {
       setError('Error creating user');
     }
   };
@@ -124,7 +124,7 @@ const UserManagement: React.FC = () => {
         const data = await response.json();
         setError(data.error || 'Failed to update user');
       }
-    } catch (err) {
+    } catch (error) {
       setError('Error updating user');
     }
   };
@@ -146,7 +146,7 @@ const UserManagement: React.FC = () => {
         const data = await response.json();
         setError(data.error || 'Failed to delete user');
       }
-    } catch (err) {
+    } catch (error) {
       setError('Error deleting user');
     }
   };

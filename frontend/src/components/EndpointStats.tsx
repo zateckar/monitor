@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Typography, Card, Box, CircularProgress, LinearProgress, Avatar, Stack, Grid} from '@mui/material';
+import { Typography, Card, Box, CircularProgress, LinearProgress, Avatar, Stack } from '@mui/material';
 import type { Endpoint } from '../types';
 import { formatDateTime, formatDate } from '../utils/timezone';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';

@@ -53,7 +53,7 @@ const StatusPagesSettings: React.FC = () => {
       const response = await fetch('/api/status-pages');
       const data = await response.json();
       setStatusPages(data);
-    } catch (err) {
+    } catch (_err) {
       setError('Failed to fetch status pages');
     }
   };
@@ -63,7 +63,7 @@ const StatusPagesSettings: React.FC = () => {
       const response = await fetch('/api/endpoints');
       const data = await response.json();
       setEndpoints(data);
-    } catch (err) {
+    } catch (_err) {
       setError('Failed to fetch endpoints');
     }
   };
@@ -269,87 +269,81 @@ const StatusPagesSettings: React.FC = () => {
           {editingPage ? 'Edit Status Page' : 'Create Status Page'}
         </DialogTitle>
         <DialogContent>
-          <Box sx={{ pt: 1 }}>
-            <Grid container spacing={2}>
-              <Grid item xs={12}>
-                <TextField
-                  label="Name"
-                  fullWidth
-                  value={formData.name}
-                  onChange={(e) => handleNameChange(e.target.value)}
-                  error={!formData.name.trim()}
-                  helperText={!formData.name.trim() ? 'Name is required' : ''}
+          <Box sx={{ pt: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <TextField
+              label="Name"
+              fullWidth
+              value={formData.name}
+              onChange={(e) => handleNameChange(e.target.value)}
+              error={!formData.name.trim()}
+              helperText={!formData.name.trim() ? 'Name is required' : ''}
+            />
+            
+            <TextField
+              label="URL Slug"
+              fullWidth
+              value={formData.slug}
+              onChange={(e) => setFormData({ ...formData, slug: e.target.value })}
+              error={!formData.slug.trim()}
+              helperText={
+                !formData.slug.trim() 
+                  ? 'Slug is required' 
+                  : `Status page will be available at: ${window.location.origin}/status/${formData.slug}`
+              }
+            />
+            
+            <TextField
+              label="Description"
+              fullWidth
+              multiline
+              rows={2}
+              value={formData.description}
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+            />
+            
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={formData.is_public}
+                  onChange={(e) => setFormData({ ...formData, is_public: e.target.checked })}
                 />
-              </Grid>
-              <Grid item xs={12}>
-                <TextField
-                  label="URL Slug"
-                  fullWidth
-                  value={formData.slug}
-                  onChange={(e) => setFormData({ ...formData, slug: e.target.value })}
-                  error={!formData.slug.trim()}
-                  helperText={
-                    !formData.slug.trim() 
-                      ? 'Slug is required' 
-                      : `Status page will be available at: ${window.location.origin}/status/${formData.slug}`
-                  }
-                />
-              </Grid>
-              <Grid item xs={12}>
-                <TextField
-                  label="Description"
-                  fullWidth
-                  multiline
-                  rows={2}
-                  value={formData.description}
-                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                />
-              </Grid>
-              <Grid item xs={12}>
-                <FormControlLabel
-                  control={
-                    <Switch
-                      checked={formData.is_public}
-                      onChange={(e) => setFormData({ ...formData, is_public: e.target.checked })}
+              }
+              label="Public (accessible without authentication)"
+            />
+            
+            <Box>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                Select Monitors to Include:
+              </Typography>
+              <Paper sx={{ p: 2, maxHeight: 300, overflow: 'auto' }}>
+                <FormGroup>
+                  {endpoints.map((endpoint) => (
+                    <FormControlLabel
+                      key={endpoint.id}
+                      control={
+                        <Checkbox
+                          checked={formData.monitor_ids.includes(Number(endpoint.id))}
+                          onChange={() => handleMonitorToggle(Number(endpoint.id))}
+                        />
+                      }
+                      label={
+                        <Box>
+                          <Typography variant="body2">{endpoint.name}</Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {endpoint.url} • {endpoint.type}
+                          </Typography>
+                        </Box>
+                      }
                     />
-                  }
-                  label="Public (accessible without authentication)"
-                />
-              </Grid>
-              <Grid item xs={12}>
-                <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                  Select Monitors to Include:
+                  ))}
+                </FormGroup>
+              </Paper>
+              {formData.monitor_ids.length === 0 && (
+                <Typography variant="caption" color="error">
+                  Please select at least one monitor
                 </Typography>
-                <Paper sx={{ p: 2, maxHeight: 300, overflow: 'auto' }}>
-                  <FormGroup>
-                    {endpoints.map((endpoint) => (
-                      <FormControlLabel
-                        key={endpoint.id}
-                        control={
-                          <Checkbox
-                            checked={formData.monitor_ids.includes(Number(endpoint.id))}
-                            onChange={() => handleMonitorToggle(Number(endpoint.id))}
-                          />
-                        }
-                        label={
-                          <Box>
-                            <Typography variant="body2">{endpoint.name}</Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              {endpoint.url} • {endpoint.type}
-                            </Typography>
-                          </Box>
-                        }
-                      />
-                    ))}
-                  </FormGroup>
-                </Paper>
-                {formData.monitor_ids.length === 0 && (
-                  <Typography variant="caption" color="error">
-                    Please select at least one monitor
-                  </Typography>
-                )}
-              </Grid>
-            </Grid>
+              )}
+            </Box>
           </Box>
         </DialogContent>
         <DialogActions>

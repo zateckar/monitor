@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { formatChartTime, useTimezone } from '../utils/timezone';
+import { formatChartTime } from '../utils/timezone';
 
 interface ThemeSettings {
   mode: 'light' | 'dark';
@@ -33,6 +33,11 @@ interface ResponseTime {
   data_points?: number; // For aggregated data
 }
 
+interface Endpoint {
+  id: number;
+  heartbeat_interval?: number;
+}
+
 interface EndpointChartProps {
   endpointId: number;
   timeRange: string;
@@ -40,7 +45,7 @@ interface EndpointChartProps {
 
 const EndpointChart = ({ endpointId, timeRange }: EndpointChartProps) => {
   const [data, setData] = useState<ResponseTime[]>([]);
-  const [endpoint, setEndpoint] = useState<any>(null);
+  const [endpoint, setEndpoint] = useState<Endpoint | null>(null);
   const [themeSettings, setThemeSettings] = useState<ThemeSettings>(defaultThemeSettings);
 
   useEffect(() => {
@@ -48,12 +53,12 @@ const EndpointChart = ({ endpointId, timeRange }: EndpointChartProps) => {
       // Fetch both response times and endpoint info
       Promise.all([
         fetch(`/api/endpoints/${endpointId}/response-times?range=${timeRange}`).then(res => res.json()),
-        fetch(`/api/endpoints`).then(res => res.json()).then(endpoints => 
-          endpoints.find((e: any) => e.id === endpointId)
+        fetch(`/api/endpoints`).then(res => res.json()).then((endpoints: Endpoint[]) => 
+          endpoints.find((e: Endpoint) => e.id === endpointId)
         )
       ]).then(([responseData, endpointData]) => {
         setData(responseData);
-        setEndpoint(endpointData);
+        setEndpoint(endpointData || null);
       });
     };
 
@@ -65,12 +70,16 @@ const EndpointChart = ({ endpointId, timeRange }: EndpointChartProps) => {
 
   // Listen for timezone changes and trigger a re-render
   useEffect(() => {
-    const cleanup = useTimezone(() => {
+    const handleTimezoneChange = () => {
       // Force re-render when timezone changes
       setData(current => [...current]);
-    });
+    };
 
-    return cleanup;
+    window.addEventListener('timezoneChanged', handleTimezoneChange);
+    
+    return () => {
+      window.removeEventListener('timezoneChanged', handleTimezoneChange);
+    };
   }, []);
 
   // Load theme settings and listen for changes
@@ -95,10 +104,10 @@ const EndpointChart = ({ endpointId, timeRange }: EndpointChartProps) => {
       setThemeSettings(event.detail);
     };
 
-    window.addEventListener('themeChanged' as any, handleThemeChange);
+    window.addEventListener('themeChanged', handleThemeChange as EventListener);
 
     return () => {
-      window.removeEventListener('themeChanged' as any, handleThemeChange);
+      window.removeEventListener('themeChanged', handleThemeChange as EventListener);
     };
   }, []);
 
@@ -215,7 +224,7 @@ const EndpointChart = ({ endpointId, timeRange }: EndpointChartProps) => {
   const yDomain = getYDomain();
 
   // Custom tick component for two-line date/time display
-  const CustomXAxisTick = (props: any) => {
+  const CustomXAxisTick = (props: { x: number; y: number; payload: { value: number } }) => {
     const { x, y, payload } = props;
     const timestamp = payload.value;
     const formattedTime = formatTime(new Date(timestamp).toISOString());
@@ -267,7 +276,7 @@ const EndpointChart = ({ endpointId, timeRange }: EndpointChartProps) => {
   };
 
   // Custom tooltip that works with numerical timestamps
-  const LinearTimeTooltip = ({ active, payload }: any) => {
+  const LinearTimeTooltip = ({ active, payload }: { active?: boolean; payload?: { payload: ResponseTime & { timestamp: number; range: number; } }[] }) => {
     if (active && payload && payload.length) {
       const data = payload[0].payload;
       const tooltipBg = themeSettings.mode === 'dark' ? 'rgba(18, 18, 18, 0.95)' : 'rgba(255, 255, 255, 0.95)';
@@ -296,7 +305,7 @@ const EndpointChart = ({ endpointId, timeRange }: EndpointChartProps) => {
                 Avg: {Math.round(data.response_time)}ms
               </p>
               <p style={{ color: themeSettings.mode === 'dark' ? '#9ca3af' : '#6b7280' }}>
-                Range: {Math.round(data.min_response_time)}-{Math.round(data.max_response_time)}ms
+                Range: {Math.round(data.min_response_time || 0)}-{Math.round(data.max_response_time || 0)}ms
               </p>
               <p className="text-xs" style={{ color: statusColor }}>
                 {data.status} • {data.data_points}pts
@@ -333,7 +342,7 @@ const EndpointChart = ({ endpointId, timeRange }: EndpointChartProps) => {
             scale="time"
             domain={timeDomain}
             tickCount={6}
-            tick={<CustomXAxisTick />}
+            tick={CustomXAxisTick}
           />
           <YAxis 
             domain={yDomain}

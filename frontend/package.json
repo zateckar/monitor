@@ -4,11 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "bun --hot src/dev-server.ts",
+    "build": "bun src/build.ts",
     "lint": "eslint .",
-    "preview": "vite preview",
-    "serve": "vite build && vite preview"
+    "preview": "bun run build && bun src/preview-server.ts"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -27,13 +26,11 @@
     "@types/bun": "latest",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
-    "@vitejs/plugin-react": "^5.0.0",
     "eslint": "^9.33.0",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
     "globals": "^16.3.0",
     "typescript": "^5.9.2",
-    "typescript-eslint": "^8.39.1",
-    "vite": "^7.1.1"
+    "typescript-eslint": "^8.39.1"
   }
 }

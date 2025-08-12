@@ -20,7 +20,6 @@ import {
   DialogContent,
   DialogActions,
   CircularProgress,
-  Grid,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -111,7 +110,7 @@ const LogsSettings: React.FC = () => {
       } else {
         showAlert('error', 'Failed to update log level');
       }
-    } catch (error) {
+    } catch {
       showAlert('error', 'Failed to update log level');
     }
   };
@@ -125,7 +124,7 @@ const LogsSettings: React.FC = () => {
       } else {
         showAlert('error', 'Failed to clear logs');
       }
-    } catch (error) {
+    } catch {
       showAlert('error', 'Failed to clear logs');
     }
     setClearConfirmOpen(false);
@@ -141,7 +140,7 @@ const LogsSettings: React.FC = () => {
       } else {
         showAlert('error', 'Failed to vacuum database');
       }
-    } catch (error) {
+    } catch {
       showAlert('error', 'Failed to vacuum database');
     } finally {
       setLoading(false);
@@ -189,9 +188,9 @@ const LogsSettings: React.FC = () => {
         </Alert>
       )}
 
-      <Grid container spacing={3}>
-        <Grid item xs={12} md={6}>
-          <Card sx={{ mb: 3 }}>
+      <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', mb: 3 }}>
+        <Box sx={{ flex: '1 1 300px', minWidth: 300 }}>
+          <Card>
             <CardContent>
               <Typography variant="h6" sx={{ mb: 2 }}>
                 Log Level Configuration
@@ -214,10 +213,10 @@ const LogsSettings: React.FC = () => {
               </Typography>
             </CardContent>
           </Card>
-        </Grid>
+        </Box>
 
-        <Grid item xs={12} md={6}>
-          <Card sx={{ mb: 3 }}>
+        <Box sx={{ flex: '1 1 300px', minWidth: 300 }}>
+          <Card>
             <CardContent>
               <Typography variant="h6" sx={{ mb: 2 }}>
                 Database Management
@@ -242,8 +241,8 @@ const LogsSettings: React.FC = () => {
               </Button>
             </CardContent>
           </Card>
-        </Grid>
-      </Grid>
+        </Box>
+      </Box>
 
       <Card>
         <CardContent>

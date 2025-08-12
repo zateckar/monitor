@@ -10,6 +10,7 @@ import StatusPage from './components/StatusPage';
 import LoginPage from './components/LoginPage';
 import type { Endpoint } from './types';
 import { Button } from '@mui/material';
+import { updateFavicon, checkMonitorStatus } from './utils/favicon';
 
 interface ThemeSettings {
   mode: 'light' | 'dark';
@@ -153,10 +154,16 @@ function MainApp() {
     return () => clearInterval(interval);
   }, []);
 
+  // Update favicon based on monitor status
+  useEffect(() => {
+    const hasFailed = checkMonitorStatus(endpoints);
+    updateFavicon(hasFailed);
+  }, [endpoints]);
+
   const addEndpoint = () => {
     const tempId = `temp-${Date.now()}`;
     const newEndpoint: Endpoint = {
-      id: tempId as any, // Temporary ID
+      id: tempId as string, // Temporary ID
       name: 'New Monitor',
       type: 'http',
       url: '',
@@ -205,7 +212,8 @@ function MainApp() {
     const isNew = typeof endpoint.id === 'string' && endpoint.id.startsWith('temp-');
     
     if (isNew) {
-      const { id, ...endpointData } = endpoint;
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { id: _, ...endpointData } = endpoint;
       const res = await fetch(`http://localhost:3001/api/endpoints`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

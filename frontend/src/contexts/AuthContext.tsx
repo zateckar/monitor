@@ -23,6 +23,7 @@ interface AuthProviderProps {
   children: React.ReactNode;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -67,8 +68,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       } else {
         throw new Error(data.error || 'Login failed');
       }
-    } catch (error) {
-      throw error;
     } finally {
       setLoading(false);
     }

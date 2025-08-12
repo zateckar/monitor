@@ -3,9 +3,9 @@ FROM oven/bun:1 AS base
 WORKDIR /app
 
 # Copy package files
-COPY package.json ./
-COPY backend/package.json ./backend/
-COPY frontend/package.json ./frontend/
+COPY package.json bun.lock* ./
+COPY backend/package.json backend/bun.lock* ./backend/
+COPY frontend/package.json frontend/bun.lock* ./frontend/
 
 # Install dependencies for both frontend and backend
 RUN cd frontend && bun install --frozen-lockfile
@@ -14,6 +14,9 @@ RUN cd backend && bun install --frozen-lockfile
 # Copy source code
 COPY frontend/ ./frontend/
 COPY backend/ ./backend/
+
+# Build frontend with Bun bundler
+RUN cd frontend && bun run build
 
 # Create data directory for SQLite database
 RUN mkdir -p /app/data
@@ -25,10 +28,6 @@ USER appuser
 
 # Expose port
 EXPOSE 3001
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD bun --cwd backend -e "fetch('http://localhost:3001/api/endpoints').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
 
 # Start the application
 CMD ["bun", "start"]

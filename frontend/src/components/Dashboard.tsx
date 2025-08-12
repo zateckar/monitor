@@ -37,9 +37,7 @@ interface DashboardStats {
   monitorsWithIssues: Endpoint[];
 }
 
-interface DashboardProps {}
-
-const Dashboard: React.FC<DashboardProps> = () => {
+const Dashboard: React.FC = () => {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [outages, setOutages] = useState<Array<Outage & { endpointName: string; endpointUrl: string }>>([]);
   const [loading, setLoading] = useState(true);

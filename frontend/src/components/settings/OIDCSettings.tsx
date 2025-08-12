@@ -62,6 +62,7 @@ const OIDCSettings: React.FC = () => {
         setError('Failed to fetch OIDC providers');
       }
     } catch (err) {
+      console.error(err);
       setError('Failed to fetch OIDC providers');
     } finally {
       setLoading(false);
@@ -134,6 +135,7 @@ const OIDCSettings: React.FC = () => {
         setError(errorData.error || 'Failed to save provider');
       }
     } catch (err) {
+      console.error(err);
       setError('Failed to save provider');
     }
   };
@@ -157,6 +159,7 @@ const OIDCSettings: React.FC = () => {
         setError(errorData.error || 'Failed to delete provider');
       }
     } catch (err) {
+      console.error(err);
       setError('Failed to delete provider');
     }
   };

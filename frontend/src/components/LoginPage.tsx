@@ -66,7 +66,7 @@ const LoginPage: React.FC = () => {
       } else {
         setError(data.error || 'Failed to initiate OIDC login');
       }
-    } catch (error) {
+    } catch (_error) {
       setError('Failed to initiate OIDC login');
     } finally {
       setOidcLoading(false);
