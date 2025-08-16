@@ -2,6 +2,9 @@
 
 A comprehensive endpoint monitoring application built with Bun, Elysia, React, and TypeScript. Monitor HTTP endpoints, ping hosts, TCP ports, and Kafka services with real-time alerts and detailed analytics.
 
+![alt text]({A10B4045-EA7D-41EF-99DA-6F5B802D9B8F}.png)
+![alt text]({09CFD052-AD83-441A-8B2A-2D4662D16A49}.png)
+
 ## Features
 
 - **Multi-Protocol Monitoring**: HTTP/HTTPS, Ping, TCP, Kafka (Producer/Consumer)
