@@ -1,7 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { TextField, Button, Box, Typography, Collapse, IconButton, Select, MenuItem, InputLabel, FormControl, Checkbox, FormControlLabel } from '@mui/material';
+import { TextField, Button, Box, Typography, Collapse, IconButton, Select, MenuItem, InputLabel, FormControl, Checkbox, FormControlLabel, Alert } from '@mui/material';
 import { ExpandMore as ExpandMoreIcon } from '@mui/icons-material';
 import type { Endpoint, MonitorType } from '../types';
+import { 
+  validateUrl, 
+  validateText, 
+  validateHttpHeaders, 
+  validateJson,
+  validateCertificate,
+  validatePrivateKey,
+  validateNumber,
+  validatePort,
+  validateHttpStatuses,
+  MAX_LENGTHS,
+  sanitizeForDisplay
+} from '../utils/validation';
 
 interface EditEndpointFormProps {
   endpoint: Endpoint;
@@ -35,9 +48,63 @@ const EditEndpointForm: React.FC<EditEndpointFormProps> = ({ endpoint, onUpdate,
   const [clientCertPrivateKey, setClientCertPrivateKey] = useState('');
   const [clientCertCa, setClientCertCa] = useState('');
 
+  // Validation error states
+  const [validationErrors, setValidationErrors] = useState<{ [key: string]: string }>({});
+  const [hasValidationErrors, setHasValidationErrors] = useState(false);
+
+  // Real-time validation function
+  const validateField = (fieldName: string, value: any, validationType: string) => {
+    let validation;
+    switch (validationType) {
+      case 'url':
+        validation = validateUrl(value);
+        break;
+      case 'text':
+        validation = validateText(value, MAX_LENGTHS.NAME, fieldName);
+        break;
+      case 'longtext':
+        validation = validateText(value, MAX_LENGTHS.HTTP_BODY, fieldName);
+        break;
+      case 'headers':
+        validation = validateHttpHeaders(value);
+        break;
+      case 'json':
+        validation = validateJson(value, fieldName);
+        break;
+      case 'certificate':
+        validation = validateCertificate(value, fieldName);
+        break;
+      case 'privatekey':
+        validation = validatePrivateKey(value, fieldName);
+        break;
+      case 'number':
+        validation = validateNumber(value, 10, 86400, fieldName);
+        break;
+      case 'port':
+        validation = validatePort(value);
+        break;
+      case 'statuses':
+        validation = validateHttpStatuses(value);
+        break;
+      default:
+        validation = { isValid: true };
+    }
+
+    const newErrors = { ...validationErrors };
+    if (!validation.isValid) {
+      newErrors[fieldName] = validation.error!;
+    } else {
+      delete newErrors[fieldName];
+    }
+
+    setValidationErrors(newErrors);
+    setHasValidationErrors(Object.keys(newErrors).length > 0);
+    return validation;
+  };
+
   useEffect(() => {
     if (endpoint) {
-      setName(endpoint.name);
+      setName(sanitizeForDisplay(endpoint.name));
       setType(endpoint.type);
       setUrl(endpoint.url);
       setHeartbeatInterval(endpoint.heartbeat_interval);
@@ -94,13 +161,26 @@ const EditEndpointForm: React.FC<EditEndpointFormProps> = ({ endpoint, onUpdate,
 
   return (
     <Box component="form" onSubmit={handleSubmit} sx={{ mb: 4 }}>
+      {hasValidationErrors && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          Please fix the validation errors below before submitting.
+        </Alert>
+      )}
+      
       <TextField
         label="Friendly Name"
         variant="outlined"
         fullWidth
         value={name}
-        onChange={(e) => setName(e.target.value)}
+        onChange={(e) => {
+          const value = e.target.value;
+          setName(value);
+          validateField('name', value, 'text');
+        }}
         placeholder="My Awesome API"
+        error={!!validationErrors.name}
+        helperText={validationErrors.name}
+        inputProps={{ maxLength: MAX_LENGTHS.NAME }}
         sx={{ mb: 2 }}
       />
       <FormControl fullWidth sx={{ mb: 2 }}>
@@ -122,9 +202,16 @@ const EditEndpointForm: React.FC<EditEndpointFormProps> = ({ endpoint, onUpdate,
         variant="outlined"
         fullWidth
         value={url}
-        onChange={(e) => setUrl(e.target.value)}
+        onChange={(e) => {
+          const value = e.target.value;
+          setUrl(value);
+          validateField('url', value, 'url');
+        }}
         placeholder="https://example.com"
         required
+        error={!!validationErrors.url}
+        helperText={validationErrors.url}
+        inputProps={{ maxLength: MAX_LENGTHS.URL }}
         sx={{ mb: 2 }}
       />
       {type === 'tcp' && (

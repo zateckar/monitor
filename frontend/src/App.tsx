@@ -72,6 +72,8 @@ function MainApp() {
   const [selectedEndpoint, setSelectedEndpoint] = useState<Endpoint | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [themeSettings, setThemeSettings] = useState<ThemeSettings>(defaultThemeSettings);
+  const [isCreatingNewMonitor, setIsCreatingNewMonitor] = useState(false);
+  const [isEditingMonitor, setIsEditingMonitor] = useState(false);
   const { user } = useAuth();
 
   // Load theme settings and listen for changes
@@ -124,26 +126,31 @@ function MainApp() {
     },
   });
 
-  useEffect(() => {
-    const fetchData = () => {
-      fetch('http://localhost:3001/api/endpoints')
-        .then((res) => res.json())
-        .then((data) => {
-          setEndpoints(data);
-          // Update selected endpoint if it exists in the new data
-          setSelectedEndpoint(prev => {
-            if (prev) {
-              const updatedSelected = data.find((e: Endpoint) => e.id === prev.id);
-              return updatedSelected || null;
-            }
-            return prev;
-          });
-        })
-        .catch((error) => {
-          console.error('Error fetching endpoints:', error);
-        });
-    };
+  const fetchData = () => {
+    // Don't auto-refresh when creating or editing a monitor to avoid interruption
+    if (isCreatingNewMonitor || isEditingMonitor) {
+      return;
+    }
 
+    fetch('http://localhost:3001/api/endpoints')
+      .then((res) => res.json())
+      .then((data) => {
+        setEndpoints(data);
+        // Update selected endpoint if it exists in the new data
+        setSelectedEndpoint(prev => {
+          if (prev) {
+            const updatedSelected = data.find((e: Endpoint) => e.id === prev.id);
+            return updatedSelected || null;
+          }
+          return prev;
+        });
+      })
+      .catch((error) => {
+        console.error('Error fetching endpoints:', error);
+      });
+  };
+
+  useEffect(() => {
     // Initial fetch
     fetchData();
 
@@ -152,7 +159,7 @@ function MainApp() {
 
     // Cleanup interval on component unmount
     return () => clearInterval(interval);
-  }, []);
+  }, [isCreatingNewMonitor, isEditingMonitor]);
 
   // Update favicon based on monitor status
   useEffect(() => {
@@ -196,6 +203,14 @@ function MainApp() {
     };
     setEndpoints([...endpoints, newEndpoint]);
     setSelectedEndpoint(newEndpoint);
+    setIsCreatingNewMonitor(true); // Pause auto-refresh during creation
+  };
+
+  const cancelNewMonitor = () => {
+    // Remove the temporary endpoint from the list
+    setEndpoints(endpoints.filter(e => !(typeof e.id === 'string' && e.id.startsWith('temp-'))));
+    setSelectedEndpoint(null);
+    setIsCreatingNewMonitor(false); // Resume auto-refresh
   };
 
   const deleteEndpoint = async (id: number) => {
@@ -224,6 +239,7 @@ function MainApp() {
         endpoints.map((e) => (e.id === endpoint.id ? newEndpoint : e))
       );
       setSelectedEndpoint(newEndpoint);
+      setIsCreatingNewMonitor(false); // Resume auto-refresh after creation
     } else {
       const res = await fetch(`http://localhost:3001/api/endpoints/${endpoint.id}`, {
         method: 'PUT',
@@ -236,6 +252,7 @@ function MainApp() {
       );
       setSelectedEndpoint(updatedEndpoint);
     }
+    setIsEditingMonitor(false); // Resume auto-refresh after editing
   };
 
   const togglePauseEndpoint = async (id: number) => {
@@ -308,13 +325,17 @@ function MainApp() {
             display: 'flex',
             flexDirection: 'column'
           }}>
-            <EndpointDetail
-              key={selectedEndpoint ? selectedEndpoint.id : 'none'}
-              endpoint={selectedEndpoint}
-              onUpdate={updateEndpoint}
-              onDelete={deleteEndpoint}
-              onTogglePause={togglePauseEndpoint}
-            />
+              <EndpointDetail
+                key={selectedEndpoint ? selectedEndpoint.id : 'none'}
+                endpoint={selectedEndpoint}
+                onUpdate={updateEndpoint}
+                onDelete={deleteEndpoint}
+                onTogglePause={togglePauseEndpoint}
+                onCancelCreation={cancelNewMonitor}
+                onEditingChange={setIsEditingMonitor}
+                onRefresh={fetchData}
+                isPaused={isCreatingNewMonitor || isEditingMonitor}
+              />
           </Box>
         }
       />

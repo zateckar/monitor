@@ -148,6 +148,14 @@ function createTables(db: Database): void {
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS system_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
 }
 
 function runMigrations(db: Database): void {
@@ -159,7 +167,9 @@ function runMigrations(db: Database): void {
     'ALTER TABLE endpoints ADD COLUMN client_cert_private_key TEXT',
     'ALTER TABLE endpoints ADD COLUMN client_cert_ca TEXT',
     'ALTER TABLE endpoints ADD COLUMN last_checked DATETIME',
-    'ALTER TABLE oidc_providers ADD COLUMN redirect_base_url TEXT DEFAULT \'http://localhost:3001\''
+    'ALTER TABLE oidc_providers ADD COLUMN redirect_base_url TEXT DEFAULT \'http://localhost:3001\'',
+    'ALTER TABLE endpoints ADD COLUMN kafka_consumer_read_single BOOLEAN DEFAULT false',
+    'ALTER TABLE endpoints ADD COLUMN kafka_consumer_auto_commit BOOLEAN DEFAULT true'
   ];
 
   for (const migration of migrations) {

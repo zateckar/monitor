@@ -23,7 +23,8 @@ import {
   History,
   Warning,
   CheckCircle,
-  Error as ErrorIcon
+  Error as ErrorIcon,
+  Refresh as RefreshIcon
 } from '@mui/icons-material';
 import type { Endpoint, Outage } from '../types';
 
@@ -37,7 +38,12 @@ interface DashboardStats {
   monitorsWithIssues: Endpoint[];
 }
 
-const Dashboard: React.FC = () => {
+interface DashboardProps {
+  isPaused?: boolean;
+  onRefresh?: () => void;
+}
+
+const Dashboard: React.FC<DashboardProps> = ({ isPaused = false }) => {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [outages, setOutages] = useState<Array<Outage & { endpointName: string; endpointUrl: string }>>([]);
   const [loading, setLoading] = useState(true);
@@ -45,6 +51,11 @@ const Dashboard: React.FC = () => {
 
   useEffect(() => {
     const fetchDashboardData = async () => {
+      // Don't auto-refresh when editing to avoid interruption
+      if (isPaused) {
+        return;
+      }
+
       try {
         setLoading(true);
         setError(null);
@@ -137,7 +148,7 @@ const Dashboard: React.FC = () => {
     // Refresh dashboard data every 30 seconds
     const interval = setInterval(fetchDashboardData, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isPaused]);
 
   const formatResponseTime = (time: number): string => {
     if (time < 1000) {

@@ -43,6 +43,8 @@ export interface Endpoint {
   kafka_topic?: string;
   kafka_message?: string; // For producer
   kafka_config?: string; // For consumer/producer specific configs
+  kafka_consumer_read_single?: boolean; // For consumer: read only one message
+  kafka_consumer_auto_commit?: boolean; // For consumer: enable/disable autocommit
 }
 
 export interface ResponseTime {

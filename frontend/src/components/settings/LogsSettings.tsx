@@ -44,8 +44,9 @@ interface DatabaseStats {
 
 const LogsSettings: React.FC = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [logLevel, setLogLevel] = useState<string>('info');
+  const [logLevel, setLogLevel] = useState<string>('');
   const [loading, setLoading] = useState(false);
+  const [logLevelLoading, setLogLevelLoading] = useState(true);
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [vacuumConfirmOpen, setVacuumConfirmOpen] = useState(false);
   const [alert, setAlert] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -74,6 +75,7 @@ const LogsSettings: React.FC = () => {
 
   const loadLogLevel = async () => {
     try {
+      setLogLevelLoading(true);
       const response = await fetch('/api/logs/level');
       if (response.ok) {
         const data = await response.json();
@@ -81,6 +83,8 @@ const LogsSettings: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to load log level:', error);
+    } finally {
+      setLogLevelLoading(false);
     }
   };
 
@@ -201,6 +205,7 @@ const LogsSettings: React.FC = () => {
                   value={logLevel}
                   onChange={(e) => updateLogLevel(e.target.value)}
                   label="Log Level"
+                  disabled={logLevelLoading}
                 >
                   <MenuItem value="debug">Debug (All messages)</MenuItem>
                   <MenuItem value="info">Info (Info, Warn, Error)</MenuItem>
@@ -209,7 +214,11 @@ const LogsSettings: React.FC = () => {
                 </Select>
               </FormControl>
               <Typography variant="body2" color="text.secondary">
-                Current level: <Chip label={logLevel.toUpperCase()} size="small" />
+                Current level: {logLevelLoading ? (
+                  <CircularProgress size={16} />
+                ) : (
+                  <Chip label={logLevel.toUpperCase()} size="small" />
+                )}
               </Typography>
             </CardContent>
           </Card>

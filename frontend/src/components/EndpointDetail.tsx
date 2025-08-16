@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Typography, Card, CardContent, Box, Chip, Button, Select, MenuItem, FormControl, InputLabel, ToggleButton, ToggleButtonGroup, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, CardHeader, Stack } from '@mui/material';
 import type { Endpoint, NotificationService } from '../types';
 import { useAuth } from '../contexts/AuthContext';
+import { getStoredTimePeriod, storeTimePeriod } from '../utils/localStorage';
 import EndpointChart from './EndpointChart';
 import EndpointStats from './EndpointStats';
 import EditEndpointForm from './EditEndpointForm';
@@ -23,17 +24,37 @@ interface EndpointDetailProps {
   onUpdate: (endpoint: Endpoint) => void;
   onDelete: (id: number) => void;
   onTogglePause?: (id: number) => void;
+  onCancelCreation?: () => void;
+  onEditingChange?: (isEditing: boolean) => void;
+  onRefresh?: () => void;
+  isPaused?: boolean;
 }
 
-const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, onUpdate, onDelete, onTogglePause }) => {
+const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, onUpdate, onDelete, onTogglePause, onCancelCreation, onEditingChange, onRefresh, isPaused }) => {
   const { user } = useAuth();
-  const [timeRange, setTimeRange] = useState('24h');
+  const [timeRange, setTimeRange] = useState(() => getStoredTimePeriod());
   const [isEditing, setIsEditing] = useState(false);
   const [allServices, setAllServices] = useState<NotificationService[]>([]);
   const [linkedServices, setLinkedServices] = useState<NotificationService[]>([]);
   const [selectedService, setSelectedService] = useState<number | ''>('');
   const [deleteHeartbeatsDialogOpen, setDeleteHeartbeatsDialogOpen] = useState(false);
   const [deletingHeartbeats, setDeletingHeartbeats] = useState(false);
+
+  // Check if this is a new monitor and automatically start editing
+  useEffect(() => {
+    if (endpoint && typeof endpoint.id === 'string' && endpoint.id.startsWith('temp-')) {
+      setIsEditing(true);
+      onEditingChange?.(true);
+    } else {
+      setIsEditing(false);
+      onEditingChange?.(false);
+    }
+  }, [endpoint, onEditingChange]);
+
+  // Notify parent when editing state changes
+  useEffect(() => {
+    onEditingChange?.(isEditing);
+  }, [isEditing, onEditingChange]);
 
   useEffect(() => {
     if (endpoint && typeof endpoint.id === 'number') {
@@ -53,6 +74,7 @@ const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, onUpdate, onD
   ) => {
     if (newTimeRange !== null) {
       setTimeRange(newTimeRange);
+      storeTimePeriod(newTimeRange);
     }
   };
 
@@ -92,8 +114,10 @@ const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, onUpdate, onD
       }
 
       setDeleteHeartbeatsDialogOpen(false);
-      // Refresh the page or trigger a data refresh
-      window.location.reload();
+      // Trigger a proper data refresh instead of page reload
+      if (onRefresh) {
+        onRefresh();
+      }
     } catch (error) {
       console.error('Error deleting heartbeats:', error);
       alert('Failed to delete heartbeat data');
@@ -103,7 +127,7 @@ const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, onUpdate, onD
   };
 
   if (!endpoint) {
-    return <Dashboard />;
+    return <Dashboard isPaused={isPaused} onRefresh={onRefresh} />;
   }
 
   const getStatusColor = (status: string) => {
@@ -121,7 +145,14 @@ const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, onUpdate, onD
             onUpdate(updatedEndpoint);
             setIsEditing(false);
           }}
-          onCancel={() => setIsEditing(false)}
+          onCancel={() => {
+            const isNewMonitor = typeof endpoint.id === 'string' && endpoint.id.startsWith('temp-');
+            if (isNewMonitor && onCancelCreation) {
+              onCancelCreation();
+            } else {
+              setIsEditing(false);
+            }
+          }}
         />
       </Box>
     );

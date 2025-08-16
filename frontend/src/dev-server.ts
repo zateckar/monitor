@@ -2,7 +2,7 @@ import { serve } from "bun";
 import { join } from "path";
 import { readFileSync } from "fs";
 
-const PORT = 5173;
+const PORT = 5174;
 const BACKEND_URL = "http://localhost:3001";
 
 serve({
