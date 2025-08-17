@@ -198,16 +198,17 @@ const EditEndpointForm: React.FC<EditEndpointFormProps> = ({ endpoint, onUpdate,
         </Select>
       </FormControl>
       <TextField
-        label="Endpoint URL"
+        label={type === 'kafka_producer' || type === 'kafka_consumer' ? 'Bootstrap Servers' : 'Endpoint URL'}
         variant="outlined"
         fullWidth
         value={url}
         onChange={(e) => {
           const value = e.target.value;
           setUrl(value);
-          validateField('url', value, 'url');
+          const isKafka = type === 'kafka_producer' || type === 'kafka_consumer';
+          validateField('url', value, isKafka ? 'text' : 'url');
         }}
-        placeholder="https://example.com"
+        placeholder={type === 'kafka_producer' || type === 'kafka_consumer' ? 'kafka-broker1:9092,kafka-broker2:9092' : 'https://example.com'}
         required
         error={!!validationErrors.url}
         helperText={validationErrors.url}

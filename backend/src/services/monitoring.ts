@@ -306,6 +306,9 @@ export class MonitoringService {
     }
 
     const scheduleCheck = () => {
+      // Ensure heartbeat_interval is a positive number, default to 60 if invalid
+      const intervalSeconds = (endpoint.heartbeat_interval && endpoint.heartbeat_interval > 0) ? endpoint.heartbeat_interval : 60;
+
       const timer = setTimeout(async () => {
         try {
           // Check if endpoint is still not paused before running check
@@ -322,7 +325,7 @@ export class MonitoringService {
         }
         // Schedule the next check
         scheduleCheck();
-      }, (endpoint.heartbeat_interval || 60) * 1000);
+      }, intervalSeconds * 1000);
 
       this.endpointTimers.set(endpoint.id, timer);
     };

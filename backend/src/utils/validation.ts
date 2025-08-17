@@ -322,12 +322,43 @@ export function validateEndpoint(data: any): ValidationResult {
   const errors: string[] = [];
   const sanitizedData: any = {};
 
-  // Validate URL
-  const urlValidation = validateUrl(data.url);
-  if (!urlValidation.isValid) {
-    errors.push(urlValidation.error!);
+  // Validate type first to determine validation strategy
+  const validTypes = ['http', 'ping', 'tcp', 'kafka_producer', 'kafka_consumer'];
+  if (!data.type || !validTypes.includes(data.type)) {
+    errors.push(`Type must be one of: ${validTypes.join(', ')}`);
   } else {
-    sanitizedData.url = urlValidation.sanitizedValue;
+    sanitizedData.type = data.type;
+  }
+
+  // Bypass URL validation for Kafka, as it uses a bootstrap server list
+  if (sanitizedData.type !== 'kafka_producer' && sanitizedData.type !== 'kafka_consumer') {
+    const urlValidation = validateUrl(data.url);
+    if (!urlValidation.isValid) {
+      errors.push(urlValidation.error!);
+    } else {
+      sanitizedData.url = urlValidation.sanitizedValue;
+    }
+  } else {
+    // For Kafka, we just need to validate the text field but without HTML escaping
+    const kafkaUrl = data.url;
+    if (!kafkaUrl || typeof kafkaUrl !== 'string') {
+        errors.push('URL is required and must be a string');
+    } else if (kafkaUrl.length > MAX_LENGTHS.URL) {
+        errors.push(`URL exceeds maximum length of ${MAX_LENGTHS.URL} characters`);
+    } else {
+        let isDangerous = false;
+        for (const pattern of DANGEROUS_PATTERNS) {
+            if (pattern.test(kafkaUrl)) {
+                isDangerous = true;
+                break;
+            }
+        }
+        if (isDangerous) {
+            errors.push('URL contains potentially dangerous content');
+        } else {
+            sanitizedData.url = kafkaUrl.trim();
+        }
+    }
   }
 
   // Validate name
@@ -338,12 +369,29 @@ export function validateEndpoint(data: any): ValidationResult {
     sanitizedData.name = nameValidation.sanitizedValue;
   }
 
-  // Validate type
-  const validTypes = ['http', 'ping', 'tcp', 'kafka_producer', 'kafka_consumer'];
-  if (!data.type || !validTypes.includes(data.type)) {
-    errors.push(`Type must be one of: ${validTypes.join(', ')}`);
+  // Validate boolean fields
+  sanitizedData.upside_down_mode = Boolean(data.upside_down_mode);
+  sanitizedData.check_cert_expiry = Boolean(data.check_cert_expiry);
+  sanitizedData.client_cert_enabled = Boolean(data.client_cert_enabled);
+
+  // Validate HTTP method
+  const validHttpMethods = ['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS', 'PATCH'];
+  if (data.http_method && !validHttpMethods.includes(data.http_method.toUpperCase())) {
+    errors.push(`HTTP method must be one of: ${validHttpMethods.join(', ')}`);
   } else {
-    sanitizedData.type = data.type;
+    sanitizedData.http_method = data.http_method ? data.http_method.toUpperCase() : 'GET';
+  }
+
+  // Validate certificate expiry threshold
+  if (data.cert_expiry_threshold !== undefined && data.cert_expiry_threshold !== null) {
+    const thresholdValidation = validateNumber(data.cert_expiry_threshold, 1, 365, 'Certificate expiry threshold');
+    if (!thresholdValidation.isValid) {
+      errors.push(thresholdValidation.error!);
+    } else {
+      sanitizedData.cert_expiry_threshold = thresholdValidation.sanitizedValue;
+    }
+  } else {
+    sanitizedData.cert_expiry_threshold = 30;
   }
 
   // Validate heartbeat interval
@@ -439,6 +487,23 @@ export function validateEndpoint(data: any): ValidationResult {
         errors.push(messageValidation.error!);
       } else {
         sanitizedData.kafka_message = messageValidation.sanitizedValue;
+      }
+    }
+
+    // Validate Kafka consumer specific fields
+    if (data.type === 'kafka_consumer') {
+      // Validate kafka_consumer_read_single (boolean converted to number 0/1)
+      if (data.kafka_consumer_read_single !== undefined && data.kafka_consumer_read_single !== null) {
+        sanitizedData.kafka_consumer_read_single = Boolean(data.kafka_consumer_read_single) ? 1 : 0;
+      } else {
+        sanitizedData.kafka_consumer_read_single = 0;
+      }
+
+      // Validate kafka_consumer_auto_commit (boolean converted to number 0/1)
+      if (data.kafka_consumer_auto_commit !== undefined && data.kafka_consumer_auto_commit !== null) {
+        sanitizedData.kafka_consumer_auto_commit = Boolean(data.kafka_consumer_auto_commit) ? 1 : 0;
+      } else {
+        sanitizedData.kafka_consumer_auto_commit = 1;
       }
     }
   }

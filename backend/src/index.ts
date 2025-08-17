@@ -49,15 +49,6 @@ async function main() {
 
   const app = new Elysia()
     .use(cors())
-    // Add JSON body parsing configuration
-    .onRequest((context) => {
-      // Ensure Content-Type is properly handled
-      const contentType = context.request.headers.get('content-type');
-      if (contentType && contentType.includes('application/json')) {
-        // Elysia should automatically parse JSON, but let's make sure
-        return;
-      }
-    })
     // Mount route handlers
     .use(createAuthRoutes(authService, logger))
     .use(createEndpointsRoutes(db, authService, logger, monitoringService, requireAuth, requireRole))

@@ -13,33 +13,23 @@ export function createFaviconWithBadge(hasFailed: boolean): string {
   canvas.height = 128;
 
   // Add background circle to fill the space
-  ctx.fillStyle = hasFailed ? '#ff4444' : '#22c55e';
+  ctx.fillStyle = hasFailed ? '#ff4444' : '#22c55ec9';
   ctx.beginPath();
   ctx.arc(64, 64, 64, 0, 2 * Math.PI);
   ctx.fill();
   
-  if (hasFailed) {
-    // Draw a larger, bolder X for the failed state
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 16;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(32, 32);
-    ctx.lineTo(96, 96);
-    ctx.moveTo(96, 32);
-    ctx.lineTo(32, 96);
-    ctx.stroke();
-  } else {
-    // Draw a larger, bolder checkmark for the healthy state
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 16;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(36, 64);
-    ctx.lineTo(58, 86);
-    ctx.lineTo(92, 42);
-    ctx.stroke();
-  }
+  // Draw a thick white arrow pointing up.
+  ctx.fillStyle = '#ffffffff';
+  ctx.beginPath();
+  ctx.moveTo(44, 100); // Start at bottom-left of the arrow base
+  ctx.lineTo(84, 100); // Draw base
+  ctx.lineTo(84, 55); // Right side of arrow shaft
+  ctx.lineTo(104, 55); // Right side of arrow head base
+  ctx.lineTo(64, 20);  // Tip of the arrow
+  ctx.lineTo(24, 55);  // Left side of arrow head base
+  ctx.lineTo(44, 55);  // Left side of arrow shaft
+  ctx.closePath();    // Close path to form a solid shape
+  ctx.fill();
 
   // Convert canvas to data URL
   return canvas.toDataURL('image/png');

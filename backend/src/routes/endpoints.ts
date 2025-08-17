@@ -348,6 +348,21 @@ export function createEndpointsRoutes(
         
         logger.debug(`Received PUT /api/endpoints/${id}`, 'ENDPOINT');
         logger.debug(`Request Content-Type: ${request.headers.get('content-type')}`, 'ENDPOINT');
+        logger.debug(`Raw body: ${JSON.stringify(body)}`, 'ENDPOINT');
+        logger.debug(`Body type: ${typeof body}`, 'ENDPOINT');
+        
+        // Try to read raw request text if body is undefined
+        let parsedBody = body;
+        if (!body) {
+          try {
+            const rawText = await request.text();
+            logger.debug(`Raw request text: ${rawText}`, 'ENDPOINT');
+            parsedBody = JSON.parse(rawText);
+            logger.debug(`Parsed body: ${JSON.stringify(parsedBody)}`, 'ENDPOINT');
+          } catch (parseError) {
+            logger.error(`Failed to parse request body: ${parseError}`, 'ENDPOINT');
+          }
+        }
         
         // Check if endpoint exists
         const existingEndpoint = db.query('SELECT * FROM endpoints WHERE id = ?').get(id) as any;
@@ -357,17 +372,19 @@ export function createEndpointsRoutes(
         }
 
         // Ensure body exists and is an object
-        if (!body || typeof body !== 'object') {
+        if (!parsedBody || typeof parsedBody !== 'object') {
           set.status = 400;
-          logger.error(`Invalid request body - body: ${body}, type: ${typeof body}`, 'ENDPOINT');
+          logger.error(`Invalid request body - body: ${parsedBody}, type: ${typeof parsedBody}`, 'ENDPOINT');
           return { error: 'Invalid request body' };
         }
 
+        const bodyToValidate = parsedBody;
+
         // Log potential security issues for monitoring
-        logger.debug(`Body received for validation: ${JSON.stringify(body)}`, 'SECURITY');
+        logger.debug(`Body received for validation: ${JSON.stringify(bodyToValidate)}`, 'SECURITY');
 
         // Comprehensive validation using our security-focused validation system
-        const validation = validateEndpoint(body);
+        const validation = validateEndpoint(bodyToValidate);
         if (!validation.isValid) {
           set.status = 400;
           logger.warn(`Endpoint validation failed for update: ${validation.error}`, 'SECURITY');
@@ -383,7 +400,7 @@ export function createEndpointsRoutes(
             name = ?, url = ?, type = ?, heartbeat_interval = ?, retries = ?, upside_down_mode = ?,
             http_method = ?, http_headers = ?, http_body = ?, ok_http_statuses = ?, check_cert_expiry = ?, cert_expiry_threshold = ?, keyword_search = ?,
             client_cert_enabled = ?, client_cert_public_key = ?, client_cert_private_key = ?, client_cert_ca = ?,
-            tcp_port = ?, kafka_topic = ?, kafka_message = ?, kafka_config = ?
+            tcp_port = ?, kafka_topic = ?, kafka_message = ?, kafka_config = ?, kafka_consumer_read_single = ?, kafka_consumer_auto_commit = ?
           WHERE id = ?`,
           [
             sanitizedData.name,
@@ -407,6 +424,8 @@ export function createEndpointsRoutes(
             sanitizedData.kafka_topic,
             sanitizedData.kafka_message,
             sanitizedData.kafka_config ? JSON.stringify(sanitizedData.kafka_config) : null,
+            sanitizedData.kafka_consumer_read_single ?? null,
+            sanitizedData.kafka_consumer_auto_commit ?? null,
             id
           ]
         );
