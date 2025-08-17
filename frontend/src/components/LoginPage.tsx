@@ -186,17 +186,6 @@ const LoginPage: React.FC = () => {
             </>
           )}
 
-          <Box sx={{ mt: 3, p: 2, backgroundColor: 'grey.50', borderRadius: 1 }}>
-            <Typography variant="body2" color="text.secondary">
-              <strong>Default Admin Login:</strong>
-              <br />
-              Username: admin
-              <br />
-              Password: admin123
-              <br />
-              <em>Please change this password after first login</em>
-            </Typography>
-          </Box>
         </Paper>
       </Box>
     </Container>

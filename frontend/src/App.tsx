@@ -139,7 +139,17 @@ function MainApp() {
         // Update selected endpoint if it exists in the new data
         setSelectedEndpoint(prev => {
           if (prev) {
-            const updatedSelected = data.find((e: Endpoint) => e.id === prev.id);
+            // For newly created endpoints (that might have just received a real ID), 
+            // try to find by name and URL if ID lookup fails
+            let updatedSelected = data.find((e: Endpoint) => e.id === prev.id);
+            
+            if (!updatedSelected && typeof prev.id === 'string' && prev.id.startsWith('temp-')) {
+              // If the previous endpoint was a temp one, find by name and URL
+              updatedSelected = data.find((e: Endpoint) => 
+                e.name === prev.name && e.url === prev.url
+              );
+            }
+            
             return updatedSelected || null;
           }
           return prev;
@@ -235,11 +245,18 @@ function MainApp() {
         body: JSON.stringify(endpointData),
       });
       const newEndpoint = await res.json();
-      setEndpoints(
-        endpoints.map((e) => (e.id === endpoint.id ? newEndpoint : e))
-      );
+      
+      // Update endpoints list first
+      const updatedEndpoints = endpoints.map((e) => (e.id === endpoint.id ? newEndpoint : e));
+      setEndpoints(updatedEndpoints);
+      
+      // Set the selected endpoint to the new endpoint
       setSelectedEndpoint(newEndpoint);
-      setIsCreatingNewMonitor(false); // Resume auto-refresh after creation
+      
+      // Use setTimeout to ensure state updates are processed before resuming auto-refresh
+      setTimeout(() => {
+        setIsCreatingNewMonitor(false);
+      }, 100);
     } else {
       const res = await fetch(`/api/endpoints/${endpoint.id}`, {
         method: 'PUT',
@@ -251,8 +268,8 @@ function MainApp() {
         endpoints.map((e) => (e.id === updatedEndpoint.id ? updatedEndpoint : e))
       );
       setSelectedEndpoint(updatedEndpoint);
+      setIsEditingMonitor(false); // Resume auto-refresh after editing
     }
-    setIsEditingMonitor(false); // Resume auto-refresh after editing
   };
 
   const togglePauseEndpoint = async (id: number) => {

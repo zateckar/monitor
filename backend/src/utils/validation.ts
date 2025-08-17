@@ -116,7 +116,7 @@ export function validateAndSanitizeText(text: string, maxLength: number, fieldNa
  * Validates JSON string and structure
  */
 export function validateJsonString(jsonString: string, maxLength: number, fieldName: string): ValidationResult {
-  if (!jsonString) {
+  if (!jsonString || jsonString.trim() === '') {
     return { isValid: true, sanitizedValue: null };
   }
 
@@ -412,7 +412,7 @@ export function validateEndpoint(data: any): ValidationResult {
 
   // Validate HTTP-specific fields
   if (data.type === 'http') {
-    if (data.http_headers) {
+    if (data.http_headers && data.http_headers.trim() !== '') {
       const headersValidation = validateJsonString(data.http_headers, MAX_LENGTHS.HTTP_HEADERS, 'HTTP headers');
       if (!headersValidation.isValid) {
         errors.push(headersValidation.error!);
@@ -421,7 +421,7 @@ export function validateEndpoint(data: any): ValidationResult {
       }
     }
 
-    if (data.http_body) {
+    if (data.http_body && data.http_body.trim() !== '') {
       const bodyValidation = validateAndSanitizeText(data.http_body, MAX_LENGTHS.HTTP_BODY, 'HTTP body');
       if (!bodyValidation.isValid) {
         errors.push(bodyValidation.error!);

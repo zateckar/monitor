@@ -260,10 +260,20 @@ export function createEndpointsRoutes(
         message: `Deleted outage history (${result.changes} records)` 
       };
     })
-    .post('/endpoints', requireRole('admin')(async ({ body, request, set }: any) => {
+    .post('/endpoints', requireRole('admin')(async ({ request, set }: any) => {
       try {
         logger.debug(`Received POST /api/endpoints`, 'ENDPOINT');
         logger.debug(`Request Content-Type: ${request.headers.get('content-type')}`, 'ENDPOINT');
+        
+        // Parse request body manually
+        let body: any;
+        try {
+          body = await request.json();
+        } catch (error) {
+          set.status = 400;
+          logger.error(`Failed to parse JSON body: ${error}`, 'ENDPOINT');
+          return { error: 'Invalid JSON in request body' };
+        }
         
         // Ensure body exists and is an object
         if (!body || typeof body !== 'object') {
@@ -342,26 +352,21 @@ export function createEndpointsRoutes(
         return { error: 'Failed to create endpoint: ' + (error instanceof Error ? error.message : 'Unknown error') };
       }
     }))
-    .put('/endpoints/:id', requireRole('admin')(async ({ params, body, request, set }: any) => {
+    .put('/endpoints/:id', requireRole('admin')(async ({ params, request, set }: any) => {
       try {
         const { id } = params;
         
         logger.debug(`Received PUT /api/endpoints/${id}`, 'ENDPOINT');
         logger.debug(`Request Content-Type: ${request.headers.get('content-type')}`, 'ENDPOINT');
-        logger.debug(`Raw body: ${JSON.stringify(body)}`, 'ENDPOINT');
-        logger.debug(`Body type: ${typeof body}`, 'ENDPOINT');
         
-        // Try to read raw request text if body is undefined
-        let parsedBody = body;
-        if (!body) {
-          try {
-            const rawText = await request.text();
-            logger.debug(`Raw request text: ${rawText}`, 'ENDPOINT');
-            parsedBody = JSON.parse(rawText);
-            logger.debug(`Parsed body: ${JSON.stringify(parsedBody)}`, 'ENDPOINT');
-          } catch (parseError) {
-            logger.error(`Failed to parse request body: ${parseError}`, 'ENDPOINT');
-          }
+        // Parse request body manually
+        let body: any;
+        try {
+          body = await request.json();
+        } catch (error) {
+          set.status = 400;
+          logger.error(`Failed to parse JSON body: ${error}`, 'ENDPOINT');
+          return { error: 'Invalid JSON in request body' };
         }
         
         // Check if endpoint exists
@@ -372,13 +377,13 @@ export function createEndpointsRoutes(
         }
 
         // Ensure body exists and is an object
-        if (!parsedBody || typeof parsedBody !== 'object') {
+        if (!body || typeof body !== 'object') {
           set.status = 400;
-          logger.error(`Invalid request body - body: ${parsedBody}, type: ${typeof parsedBody}`, 'ENDPOINT');
+          logger.error(`Invalid request body - body: ${body}, type: ${typeof body}`, 'ENDPOINT');
           return { error: 'Invalid request body' };
         }
 
-        const bodyToValidate = parsedBody;
+        const bodyToValidate = body;
 
         // Log potential security issues for monitoring
         logger.debug(`Body received for validation: ${JSON.stringify(bodyToValidate)}`, 'SECURITY');
