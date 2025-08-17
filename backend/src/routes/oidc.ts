@@ -132,7 +132,17 @@ export function createOIDCRoutes(
         is_active: Boolean(provider.is_active)
       }));
     }))
-    .post('/admin/oidc-providers', requireRole('admin')(async ({ body }: any) => {
+    .post('/admin/oidc-providers', requireRole('admin')(async ({ request }: any) => {
+      let body: any;
+      try {
+        body = await request.json();
+      } catch (error) {
+        return new Response(JSON.stringify({ error: 'Invalid JSON in request body' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      
       const { name, issuer_url, client_id, client_secret, scopes, redirect_base_url } = body as {
         name: string;
         issuer_url: string;
@@ -169,8 +179,19 @@ export function createOIDCRoutes(
         is_active: Boolean(newProvider.is_active)
       };
     }))
-    .put('/admin/oidc-providers/:id', requireRole('admin')(async ({ params, body }: any) => {
+    .put('/admin/oidc-providers/:id', requireRole('admin')(async ({ params, request }: any) => {
       const { id } = params;
+      
+      let body: any;
+      try {
+        body = await request.json();
+      } catch (error) {
+        return new Response(JSON.stringify({ error: 'Invalid JSON in request body' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      
       const { name, issuer_url, client_id, client_secret, scopes, redirect_base_url, is_active } = body as {
         name?: string;
         issuer_url?: string;

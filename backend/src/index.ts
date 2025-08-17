@@ -19,6 +19,8 @@ import { NotificationService } from './services/notifications';
 // Import route handlers
 import { createAuthRoutes, createAuthMiddleware } from './routes/auth';
 import { createEndpointsRoutes } from './routes/endpoints';
+import { createUserRoutes } from './routes/users';
+import { createOIDCRoutes } from './routes/oidc';
 
 async function main() {
   // Initialize database
@@ -52,17 +54,37 @@ async function main() {
     // Mount route handlers
     .use(createAuthRoutes(authService, logger))
     .use(createEndpointsRoutes(db, authService, logger, monitoringService, requireAuth, requireRole))
+    .use(createUserRoutes(db, authService, logger, requireRole))
+    .use(createOIDCRoutes(db, oidcService, authService, logger, requireRole))
     
     // Notification services API
     .get('/api/notification-services', async () => {
       return notificationService.getNotificationServices();
     })
-    .post('/api/notification-services', requireRole('admin')(async ({ body }: any) => {
+    .post('/api/notification-services', requireRole('admin')(async ({ request }: any) => {
+      let body: any;
+      try {
+        body = await request.json();
+      } catch (error) {
+        return new Response(JSON.stringify({ error: 'Invalid JSON in request body' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
       const { name, type, config } = body as { name: string, type: string, config: object };
       return notificationService.createNotificationService(name, type, config);
     }))
-    .put('/api/notification-services/:id', requireRole('admin')(async ({ params, body }: any) => {
+    .put('/api/notification-services/:id', requireRole('admin')(async ({ params, request }: any) => {
       const { id } = params;
+      let body: any;
+      try {
+        body = await request.json();
+      } catch (error) {
+        return new Response(JSON.stringify({ error: 'Invalid JSON in request body' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
       const { name, type, config } = body as { name: string, type: string, config: object };
       return notificationService.updateNotificationService(parseInt(id), name, type, config);
     }))
@@ -75,8 +97,17 @@ async function main() {
       const { id } = params;
       return notificationService.getEndpointNotificationServices(parseInt(id));
     })
-    .post('/api/endpoints/:id/notification-services', requireRole('admin')(async ({ params, body }: any) => {
+    .post('/api/endpoints/:id/notification-services', requireRole('admin')(async ({ params, request }: any) => {
       const { id } = params;
+      let body: any;
+      try {
+        body = await request.json();
+      } catch (error) {
+        return new Response(JSON.stringify({ error: 'Invalid JSON in request body' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
       const { serviceId } = body as { serviceId: number };
       notificationService.addNotificationServiceToEndpoint(parseInt(id), serviceId);
       return { monitor_id: id, notification_service_id: serviceId };
@@ -103,7 +134,16 @@ async function main() {
     .get('/api/logs/level', requireRole('admin')(async () => {
       return { level: logger.getLogLevel() };
     }))
-    .put('/api/logs/level', requireRole('admin')(async ({ body }: any) => {
+    .put('/api/logs/level', requireRole('admin')(async ({ request }: any) => {
+      let body: any;
+      try {
+        body = await request.json();
+      } catch (error) {
+        return new Response(JSON.stringify({ error: 'Invalid JSON in request body' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
       const { level } = body as { level: string };
       console.log('PUT /api/logs/level called with level:', level);
       logger.setLogLevel(level);

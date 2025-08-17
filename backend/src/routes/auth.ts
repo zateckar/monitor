@@ -6,7 +6,20 @@ import { LoggerService } from '../services/logger';
 
 export function createAuthRoutes(authService: AuthService, logger: LoggerService) {
   return new Elysia({ prefix: '/api/auth' })
-    .post('/login', async ({ body, set }) => {
+    .post('/login', async ({ request, set }) => {
+      let body: any;
+      try {
+        body = await request.json();
+      } catch (error) {
+        set.status = 400;
+        return { error: 'Invalid JSON in request body' };
+      }
+      
+      if (!body || typeof body !== 'object') {
+        set.status = 400;
+        return { error: 'Invalid request body' };
+      }
+      
       const { username, password } = body as { username: string; password: string };
 
       if (!username || !password) {

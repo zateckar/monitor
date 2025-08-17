@@ -14,7 +14,26 @@ export function createUserRoutes(
       const users = db.query('SELECT id, username, email, role, is_active, created_at, updated_at, last_login FROM users ORDER BY created_at DESC').all() as any[];
       return users;
     }))
-    .post('/users', requireRole('admin')(async ({ body }: any) => {
+    .post('/users', requireRole('admin')(async ({ request }: any) => {
+      let body: any;
+      try {
+        body = await request.json();
+        console.log('POST /users - parsed body:', body);
+      } catch (error) {
+        console.log('POST /users - JSON parse error:', error);
+        return new Response(JSON.stringify({ error: 'Invalid JSON in request body' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      
+      if (!body || typeof body !== 'object') {
+        return new Response(JSON.stringify({ error: 'Invalid request body - body is not an object', received: body }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      
       const { username, email, password, role } = body as {
         username: string;
         email?: string;
@@ -50,8 +69,19 @@ export function createUserRoutes(
 
       return newUser;
     }))
-    .put('/users/:id', requireRole('admin')(async ({ params, body }: any) => {
+    .put('/users/:id', requireRole('admin')(async ({ params, request }: any) => {
       const { id } = params;
+      
+      let body: any;
+      try {
+        body = await request.json();
+      } catch (error) {
+        return new Response(JSON.stringify({ error: 'Invalid JSON in request body' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      
       const { username, email, role, is_active, password } = body as {
         username?: string;
         email?: string;
