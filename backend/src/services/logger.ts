@@ -11,10 +11,8 @@ export class LoggerService {
   private loadLogLevelFromDatabase(): void {
     try {
       const result = this.db.query('SELECT value FROM system_settings WHERE key = ?').get('log_level') as any;
-      console.log('Database query result for log_level:', result);
       if (result && result.value) {
         this.currentLogLevel = result.value;
-        console.log('Loaded log level from database:', result.value);
       } else {
         console.log('No log level found in database, using default:', this.currentLogLevel);
       }
@@ -49,14 +47,6 @@ export class LoggerService {
   }
 
   getLogLevel(): string {
-    console.log('getLogLevel() called, returning:', this.currentLogLevel);
-    // Also check what's actually in the database right now
-    try {
-      const dbResult = this.db.query('SELECT value FROM system_settings WHERE key = ?').get('log_level') as any;
-      console.log('Current database value for log_level:', dbResult);
-    } catch (err) {
-      console.log('Error checking database:', err);
-    }
     return this.currentLogLevel;
   }
 

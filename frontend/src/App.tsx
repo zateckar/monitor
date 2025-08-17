@@ -132,7 +132,7 @@ function MainApp() {
       return;
     }
 
-    fetch('http://localhost:3001/api/endpoints')
+    fetch('/api/endpoints')
       .then((res) => res.json())
       .then((data) => {
         setEndpoints(data);
@@ -214,7 +214,7 @@ function MainApp() {
   };
 
   const deleteEndpoint = async (id: number) => {
-    await fetch(`http://localhost:3001/api/endpoints/${id}`, {
+    await fetch(`/api/endpoints/${id}`, {
       method: 'DELETE',
     });
     setEndpoints(endpoints.filter((endpoint) => endpoint.id !== id));
@@ -229,7 +229,7 @@ function MainApp() {
     if (isNew) {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { id: _, ...endpointData } = endpoint;
-      const res = await fetch(`http://localhost:3001/api/endpoints`, {
+      const res = await fetch(`/api/endpoints`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(endpointData),
@@ -241,7 +241,7 @@ function MainApp() {
       setSelectedEndpoint(newEndpoint);
       setIsCreatingNewMonitor(false); // Resume auto-refresh after creation
     } else {
-      const res = await fetch(`http://localhost:3001/api/endpoints/${endpoint.id}`, {
+      const res = await fetch(`/api/endpoints/${endpoint.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(endpoint),
@@ -257,7 +257,7 @@ function MainApp() {
 
   const togglePauseEndpoint = async (id: number) => {
     try {
-      const res = await fetch(`http://localhost:3001/api/endpoints/${id}/toggle-pause`, {
+      const res = await fetch(`/api/endpoints/${id}/toggle-pause`, {
         method: 'POST',
       });
       const result = await res.json();

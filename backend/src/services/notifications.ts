@@ -129,4 +129,38 @@ export class NotificationService {
   removeNotificationServiceFromEndpoint(endpointId: number, serviceId: number): void {
     this.db.run('DELETE FROM monitor_notification_services WHERE monitor_id = ? AND notification_service_id = ?', [endpointId, serviceId]);
   }
+
+  async testNotificationService(serviceId: number): Promise<{ success: boolean; error?: string }> {
+    const service = this.db.query('SELECT * FROM notification_services WHERE id = ?').get(serviceId) as any;
+    
+    if (!service) {
+      return { success: false, error: 'Notification service not found' };
+    }
+
+    const config = JSON.parse(service.config);
+    const testMessage = `🧪 Test notification from Monitor system. Service "${service.name}" is working correctly!`;
+    
+    try {
+      if (service.type === 'telegram') {
+        await this.sendTelegramNotification(config, testMessage);
+      } else if (service.type === 'sendgrid') {
+        const testEndpoint = { name: 'Test Endpoint', url: 'https://example.com' };
+        await this.sendSendGridNotification(config, testMessage, testEndpoint as any, 'TEST');
+      } else if (service.type === 'slack') {
+        await this.sendSlackNotification(config, testMessage);
+      } else if (service.type === 'apprise') {
+        const testEndpoint = { name: 'Test Endpoint', url: 'https://example.com' };
+        await this.sendAppriseNotification(config, testMessage, testEndpoint as any, 'TEST');
+      } else {
+        return { success: false, error: `Unsupported notification service type: ${service.type}` };
+      }
+
+      await this.logger.info(`Test notification sent successfully for service "${service.name}" (ID: ${serviceId})`, 'NOTIFICATIONS');
+      return { success: true };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      await this.logger.error(`Test notification failed for service "${service.name}" (ID: ${serviceId}): ${errorMessage}`, 'NOTIFICATIONS');
+      return { success: false, error: errorMessage };
+    }
+  }
 }

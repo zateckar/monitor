@@ -31,7 +31,7 @@ const LoginPage: React.FC = () => {
   useEffect(() => {
     const fetchOIDCProviders = async () => {
       try {
-        const response = await fetch('http://localhost:3001/api/auth/oidc/providers');
+        const response = await fetch('/api/auth/oidc/providers');
         if (response.ok) {
           const providers = await response.json();
           setOidcProviders(providers);
@@ -57,7 +57,7 @@ const LoginPage: React.FC = () => {
     setError('');
     
     try {
-      const response = await fetch(`http://localhost:3001/api/auth/oidc/login/${providerId}`);
+      const response = await fetch(`/api/auth/oidc/login/${providerId}`);
       const data = await response.json();
       
       if (response.ok && data.authorization_url) {

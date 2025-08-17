@@ -45,7 +45,7 @@ const OIDCSettings: React.FC = () => {
     client_id: '',
     client_secret: '',
     scopes: 'openid profile email',
-    redirect_base_url: 'http://localhost:3001',
+    redirect_base_url: window.location.origin,
     is_active: true,
   });
 
@@ -93,7 +93,7 @@ const OIDCSettings: React.FC = () => {
         client_id: '',
         client_secret: '',
         scopes: 'openid profile email',
-        redirect_base_url: 'http://localhost:3001',
+        redirect_base_url: window.location.origin,
         is_active: true,
       });
     }

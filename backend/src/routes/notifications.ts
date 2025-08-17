@@ -1,11 +1,13 @@
 import { Elysia } from 'elysia';
 import { Database } from 'bun:sqlite';
 import { LoggerService } from '../services/logger';
+import { NotificationService } from '../services/notifications';
 
 export function createNotificationRoutes(
   db: Database,
   logger: LoggerService
 ) {
+  const notificationService = new NotificationService(db, logger);
   return new Elysia({ prefix: '/api' })
     .get('/notification-services', async () => {
       const services = db.query('SELECT * FROM notification_services').all() as any[];
@@ -126,5 +128,33 @@ export function createNotificationRoutes(
       }
       
       return { monitor_id: id, notification_service_id: serviceId };
+    })
+    .post('/notification-services/:id/test', async ({ params }) => {
+      const { id } = params;
+      
+      try {
+        const result = await notificationService.testNotificationService(parseInt(id));
+        
+        if (result.success) {
+          return { success: true, message: 'Test notification sent successfully' };
+        } else {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            error: result.error || 'Failed to send test notification' 
+          }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        return new Response(JSON.stringify({ 
+          success: false, 
+          error: `Unexpected error: ${errorMessage}` 
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
     });
 }

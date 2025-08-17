@@ -16,13 +16,24 @@ import {
   ListItem,
   ListItemText,
   ListItemSecondaryAction,
+  CircularProgress,
+  Alert,
+  Snackbar,
+  Tooltip,
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
+import BugReportIcon from '@mui/icons-material/BugReport';
 
 const NotificationSettings: React.FC = () => {
   const [services, setServices] = useState<NotificationService[]>([]);
   const [editingService, setEditingService] = useState<NotificationService | null>(null);
+  const [testingServices, setTestingServices] = useState<Set<number>>(new Set());
+  const [snackbar, setSnackbar] = useState<{
+    open: boolean;
+    message: string;
+    severity: 'success' | 'error';
+  }>({ open: false, message: '', severity: 'success' });
 
   useEffect(() => {
     fetch('/api/notification-services')
@@ -37,6 +48,48 @@ const NotificationSettings: React.FC = () => {
   const handleDelete = async (id: number) => {
     await fetch(`/api/notification-services/${id}`, { method: 'DELETE' });
     setServices(services.filter(s => s.id !== id));
+  };
+
+  const handleTest = async (id: number, name: string) => {
+    setTestingServices(prev => new Set(prev).add(id));
+    
+    try {
+      const response = await fetch(`/api/notification-services/${id}/test`, {
+        method: 'POST',
+      });
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        setSnackbar({
+          open: true,
+          message: `Test notification sent successfully to "${name}"`,
+          severity: 'success'
+        });
+      } else {
+        setSnackbar({
+          open: true,
+          message: `Test failed for "${name}": ${result.error}`,
+          severity: 'error'
+        });
+      }
+    } catch (error) {
+      setSnackbar({
+        open: true,
+        message: `Test failed for "${name}": ${error instanceof Error ? error.message : 'Unknown error'}`,
+        severity: 'error'
+      });
+    } finally {
+      setTestingServices(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(id);
+        return newSet;
+      });
+    }
+  };
+
+  const handleCloseSnackbar = () => {
+    setSnackbar(prev => ({ ...prev, open: false }));
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -209,6 +262,20 @@ const NotificationSettings: React.FC = () => {
               <ListItem key={service.id} divider>
                 <ListItemText primary={service.name} secondary={service.type} />
                 <ListItemSecondaryAction>
+                  <Tooltip title="Test notification">
+                    <IconButton 
+                      edge="end" 
+                      aria-label="test" 
+                      onClick={() => handleTest(service.id, service.name)}
+                      disabled={testingServices.has(service.id)}
+                    >
+                      {testingServices.has(service.id) ? (
+                        <CircularProgress size={20} />
+                      ) : (
+                        <BugReportIcon />
+                      )}
+                    </IconButton>
+                  </Tooltip>
                   <IconButton edge="end" aria-label="edit" onClick={() => handleEdit(service)}>
                     <EditIcon />
                   </IconButton>
@@ -229,6 +296,20 @@ const NotificationSettings: React.FC = () => {
           </List>
         </CardContent>
       </Card>
+
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={6000}
+        onClose={handleCloseSnackbar}
+      >
+        <Alert 
+          onClose={handleCloseSnackbar} 
+          severity={snackbar.severity}
+          sx={{ width: '100%' }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };
