@@ -1,6 +1,6 @@
 services:
   monitor:
-    image: ghcr.io/your-username/endpoint-monitor:latest
+    image: ghcr.io/zateckar/monitor:latest
     container_name: endpoint-monitor
     restart: unless-stopped
     ports:
