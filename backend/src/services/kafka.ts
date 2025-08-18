@@ -1,4 +1,4 @@
-import { Kafka, logLevel } from 'kafkajs';
+import { Kafka, logLevel } from 'kafkajs-fixes';
 import { Database } from 'bun:sqlite';
 import type { Endpoint } from '../types';
 import { LoggerService } from './logger';

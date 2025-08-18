@@ -62,6 +62,18 @@ export class OIDCService {
     return { authUrl: '', state }; // Will be populated by caller
   }
 
+  updateStateWithCodeVerifier(state: string, codeVerifier: string): void {
+    const stateData = this.oidcStates.get(state);
+    if (stateData) {
+      stateData.code_verifier = codeVerifier;
+      this.oidcStates.set(state, stateData);
+    }
+  }
+
+  getStoredState(state: string): { provider_id: number, expires_at: number, code_verifier?: string } | undefined {
+    return this.oidcStates.get(state);
+  }
+
   async validateStateAndGetConfig(state: string, providerId: number): Promise<{ config: any, codeVerifier: string } | null> {
     // Verify state
     const stateData = this.oidcStates.get(state);

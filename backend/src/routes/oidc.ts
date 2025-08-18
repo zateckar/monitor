@@ -27,22 +27,28 @@ export function createOIDCRoutes(
         return { error: 'OIDC provider not found or inactive' };
       }
 
-      // Generate state and code verifier for PKCE
-      const state = openidClient.randomNonce();
-      const codeVerifier = openidClient.randomPKCECodeVerifier();
-      const codeChallenge = await openidClient.calculatePKCECodeChallenge(codeVerifier);
-
-      // Store state and code verifier with expiration (10 minutes)
-      const stateData = {
-        provider_id: parseInt(providerId),
-        expires_at: Date.now() + 10 * 60 * 1000,
-        code_verifier: codeVerifier
-      };
-
       // Get provider scopes and redirect URL
       const provider = db.query('SELECT scopes, redirect_base_url FROM oidc_providers WHERE id = ?').get(providerId) as any;
       const scopes = provider?.scopes || 'openid profile email';
       const redirectBaseUrl = provider?.redirect_base_url || 'http://localhost:3001';
+
+      // Generate state and code verifier using the service (this will store them properly)
+      const stateInfo = oidcService.generateAuthorizationUrl(parseInt(providerId), redirectBaseUrl, scopes);
+      if (!stateInfo) {
+        set.status = 500;
+        return { error: 'Failed to generate authorization URL' };
+      }
+
+      const { state } = stateInfo;
+      
+      // Get the code verifier that was already generated and stored by the service
+      const storedStateData = oidcService.getStoredState(state);
+      if (!storedStateData || !storedStateData.code_verifier) {
+        set.status = 500;
+        return { error: 'Failed to retrieve stored state data' };
+      }
+
+      const codeChallenge = await openidClient.calculatePKCECodeChallenge(storedStateData.code_verifier);
 
       // Generate authorization URL using new v6.x API
       const authUrl = openidClient.buildAuthorizationUrl(config, {

@@ -237,38 +237,65 @@ function MainApp() {
     const isNew = typeof endpoint.id === 'string' && endpoint.id.startsWith('temp-');
     
     if (isNew) {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { id: _, ...endpointData } = endpoint;
-      const res = await fetch(`/api/endpoints`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(endpointData),
-      });
-      const newEndpoint = await res.json();
-      
-      // Update endpoints list first
-      const updatedEndpoints = endpoints.map((e) => (e.id === endpoint.id ? newEndpoint : e));
-      setEndpoints(updatedEndpoints);
-      
-      // Set the selected endpoint to the new endpoint
-      setSelectedEndpoint(newEndpoint);
-      
-      // Use setTimeout to ensure state updates are processed before resuming auto-refresh
-      setTimeout(() => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { id: _, ...endpointData } = endpoint;
+        const res = await fetch(`/api/endpoints`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(endpointData),
+        });
+        const newEndpoint = await res.json();
+        
+        // Update endpoints list first
+        const updatedEndpoints = endpoints.map((e) => (e.id === endpoint.id ? newEndpoint : e));
+        setEndpoints(updatedEndpoints);
+        
+        // Set the selected endpoint to the new endpoint
+        setSelectedEndpoint(newEndpoint);
+        
+        // Use longer timeout and fetch fresh data to ensure consistency
+        setTimeout(async () => {
+          setIsCreatingNewMonitor(false);
+          // Trigger a fresh data fetch to ensure everything is in sync
+          try {
+            const response = await fetch('/api/endpoints');
+            const freshData = await response.json();
+            setEndpoints(freshData);
+            
+            // Ensure the newly created endpoint remains selected
+            const updatedNewEndpoint = freshData.find((e: Endpoint) => e.id === newEndpoint.id);
+            if (updatedNewEndpoint) {
+              setSelectedEndpoint(updatedNewEndpoint);
+            }
+          } catch (error) {
+            console.error('Error refreshing data after endpoint creation:', error);
+          }
+        }, 200);
+      } catch (error) {
+        console.error('Error creating endpoint:', error);
         setIsCreatingNewMonitor(false);
-      }, 100);
+        // Remove the temporary endpoint on error
+        setEndpoints(endpoints.filter(e => !(typeof e.id === 'string' && e.id.startsWith('temp-'))));
+        setSelectedEndpoint(null);
+      }
     } else {
-      const res = await fetch(`/api/endpoints/${endpoint.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(endpoint),
-      });
-      const updatedEndpoint = await res.json();
-      setEndpoints(
-        endpoints.map((e) => (e.id === updatedEndpoint.id ? updatedEndpoint : e))
-      );
-      setSelectedEndpoint(updatedEndpoint);
-      setIsEditingMonitor(false); // Resume auto-refresh after editing
+      try {
+        const res = await fetch(`/api/endpoints/${endpoint.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(endpoint),
+        });
+        const updatedEndpoint = await res.json();
+        setEndpoints(
+          endpoints.map((e) => (e.id === updatedEndpoint.id ? updatedEndpoint : e))
+        );
+        setSelectedEndpoint(updatedEndpoint);
+        setIsEditingMonitor(false); // Resume auto-refresh after editing
+      } catch (error) {
+        console.error('Error updating endpoint:', error);
+        setIsEditingMonitor(false);
+      }
     }
   };
 
