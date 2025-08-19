@@ -113,7 +113,8 @@ export function createOIDCRoutes(
           }
         }
         
-        const userInfo = await oidcService.handleTokenExchange(config, callbackUrl, codeVerifier);
+        const redirectUri = `${redirectBaseUrl}/api/auth/oidc/callback/${providerId}`;
+        const userInfo = await oidcService.handleTokenExchange(config, callbackUrl, codeVerifier, redirectUri);
 
         // Find or create user
         const user = await oidcService.findOrCreateUser(parseInt(providerId), userInfo);
