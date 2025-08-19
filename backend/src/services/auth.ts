@@ -78,7 +78,7 @@ export class AuthService {
       
       console.log('\n🔐 Default admin user created:');
       console.log('   Username: admin');
-      console.log('   Password: ' + defaultPassword);
+      console.log('   Password: [hidden] (see DEFAULT_ADMIN_PASSWORD environment variable or your configuration)');
       console.log('   Please change this password after first login!\n');
     }
   }
