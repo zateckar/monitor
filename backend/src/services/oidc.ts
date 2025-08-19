@@ -100,32 +100,50 @@ export class OIDCService {
   }
 
   async handleTokenExchange(config: any, currentUrl: URL, codeVerifier: string): Promise<any> {
-    // Exchange authorization code for tokens using new v6.x API
-    const tokenSet = await openidClient.authorizationCodeGrant(config, currentUrl, {
-      pkceCodeVerifier: codeVerifier,
-      expectedNonce: undefined,
-      idTokenExpected: true,
-    });
+    try {
+      // Log the token exchange attempt for debugging
+      await this.logger.info(`Attempting token exchange with URL: ${currentUrl.href}`, 'OIDC');
+      await this.logger.info(`Using code verifier length: ${codeVerifier?.length || 0}`, 'OIDC');
 
-    // Get user info from the ID token
-    const claims = tokenSet.claims();
-    if (!claims) {
-      throw new Error('No claims found in ID token');
-    }
+      // Exchange authorization code for tokens using new v6.x API
+      const tokenSet = await openidClient.authorizationCodeGrant(config, currentUrl, {
+        pkceCodeVerifier: codeVerifier,
+        expectedNonce: undefined,
+        idTokenExpected: true,
+      });
 
-    let userInfo: any = claims;
+      await this.logger.info(`Token exchange successful, received token set`, 'OIDC');
 
-    // If we have an access token, try to get additional user info
-    if (tokenSet.access_token && claims.sub) {
-      try {
-        const additionalUserInfo = await openidClient.fetchUserInfo(config, tokenSet.access_token, claims.sub);
-        userInfo = { ...claims, ...additionalUserInfo };
-      } catch (err) {
-        await this.logger.warn(`Failed to fetch additional user info: ${err}`, 'OIDC');
+      // Get user info from the ID token
+      const claims = tokenSet.claims();
+      if (!claims) {
+        throw new Error('No claims found in ID token');
       }
-    }
 
-    return userInfo;
+      let userInfo: any = claims;
+
+      // If we have an access token, try to get additional user info
+      if (tokenSet.access_token && claims.sub) {
+        try {
+          const additionalUserInfo = await openidClient.fetchUserInfo(config, tokenSet.access_token, claims.sub);
+          userInfo = { ...claims, ...additionalUserInfo };
+        } catch (err) {
+          await this.logger.warn(`Failed to fetch additional user info: ${err}`, 'OIDC');
+        }
+      }
+
+      return userInfo;
+    } catch (error) {
+      // Enhanced error logging
+      await this.logger.error(`Token exchange failed with detailed error: ${error}`, 'OIDC');
+      if (error instanceof Error) {
+        await this.logger.error(`Error message: ${error.message}`, 'OIDC');
+        await this.logger.error(`Error stack: ${error.stack}`, 'OIDC');
+      }
+      
+      // Re-throw the error to be caught by the route handler
+      throw error;
+    }
   }
 
   async findOrCreateUser(providerId: number, userInfo: any): Promise<any> {

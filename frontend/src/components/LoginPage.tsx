@@ -102,7 +102,7 @@ const LoginPage: React.FC = () => {
         <Paper elevation={3} sx={{ padding: 4, width: '100%', maxWidth: 400 }}>
           <Box sx={{ textAlign: 'center', mb: 3 }}>
             <Typography variant="h4" component="h1" gutterBottom>
-              Monitor Dashboard
+              Monitor
             </Typography>
             <Typography variant="h6" color="text.secondary">
               Sign in to continue
@@ -176,7 +176,6 @@ const LoginPage: React.FC = () => {
                       </ListItemIcon>
                       <ListItemText
                         primary={`Sign in with ${provider.name}`}
-                        secondary={provider.issuer_url}
                       />
                       {oidcLoading && <CircularProgress size={20} />}
                     </ListItemButton>

@@ -44,37 +44,7 @@ function StatusPageWrapper() {
 
 function ProtectedApp() {
   const { user, loading } = useAuth();
-
-  if (loading) {
-    return (
-      <Box 
-        sx={{ 
-          display: 'flex', 
-          justifyContent: 'center', 
-          alignItems: 'center', 
-          height: '100vh' 
-        }}
-      >
-        <CircularProgress />
-      </Box>
-    );
-  }
-
-  if (!user) {
-    return <LoginPage />;
-  }
-
-  return <MainApp />;
-}
-
-function MainApp() {
-  const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
-  const [selectedEndpoint, setSelectedEndpoint] = useState<Endpoint | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
   const [themeSettings, setThemeSettings] = useState<ThemeSettings>(defaultThemeSettings);
-  const [isCreatingNewMonitor, setIsCreatingNewMonitor] = useState(false);
-  const [isEditingMonitor, setIsEditingMonitor] = useState(false);
-  const { user } = useAuth();
 
   // Load theme settings and listen for changes
   useEffect(() => {
@@ -125,6 +95,49 @@ function MainApp() {
       },
     },
   });
+
+  if (loading) {
+    return (
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        <Box 
+          sx={{ 
+            display: 'flex', 
+            justifyContent: 'center', 
+            alignItems: 'center', 
+            height: '100vh' 
+          }}
+        >
+          <CircularProgress />
+        </Box>
+      </ThemeProvider>
+    );
+  }
+
+  if (!user) {
+    return (
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        <LoginPage />
+      </ThemeProvider>
+    );
+  }
+
+  return (
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <MainApp />
+    </ThemeProvider>
+  );
+}
+
+function MainApp() {
+  const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
+  const [selectedEndpoint, setSelectedEndpoint] = useState<Endpoint | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [isCreatingNewMonitor, setIsCreatingNewMonitor] = useState(false);
+  const [isEditingMonitor, setIsEditingMonitor] = useState(false);
+  const { user } = useAuth();
 
   const fetchData = () => {
     // Don't auto-refresh when creating or editing a monitor to avoid interruption
@@ -324,8 +337,7 @@ function MainApp() {
   };
 
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
+    <>
       <Layout
         showSettings={showSettings}
         setShowSettings={setShowSettings}
@@ -387,7 +399,7 @@ function MainApp() {
         open={showSettings} 
         onClose={() => setShowSettings(false)} 
       />
-    </ThemeProvider>
+    </>
   );
 }
 

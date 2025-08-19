@@ -67,6 +67,10 @@ export function createOIDCRoutes(
       const { providerId } = params;
       const { code, state, error, error_description } = query as any;
 
+      // Log the incoming callback request for debugging
+      await logger.info(`OIDC callback received for provider ${providerId}`, 'OIDC');
+      await logger.info(`Callback query params: ${JSON.stringify(query)}`, 'OIDC');
+
       if (error) {
         logger.error(`OIDC callback error for provider ${providerId}: ${error} - ${error_description}`, 'OIDC');
         set.status = 400;
@@ -74,22 +78,29 @@ export function createOIDCRoutes(
       }
 
       if (!code || !state) {
+        await logger.error(`Missing required parameters - code: ${!!code}, state: ${!!state}`, 'OIDC');
         set.status = 400;
         return { error: 'Missing authorization code or state parameter' };
       }
 
       try {
+        await logger.info(`Validating state: ${state} for provider: ${providerId}`, 'OIDC');
+        
         const stateValidation = await oidcService.validateStateAndGetConfig(state, parseInt(providerId));
         if (!stateValidation) {
+          await logger.error(`State validation failed for state: ${state}, provider: ${providerId}`, 'OIDC');
           set.status = 400;
           return { error: 'Invalid or expired state parameter' };
         }
 
         const { config, codeVerifier } = stateValidation;
+        await logger.info(`State validation successful, code verifier length: ${codeVerifier?.length || 0}`, 'OIDC');
 
         // Get provider for redirect URL
         const provider = db.query('SELECT redirect_base_url FROM oidc_providers WHERE id = ?').get(providerId) as any;
         const redirectBaseUrl = provider?.redirect_base_url || 'http://localhost:3001';
+        
+        await logger.info(`Using redirect base URL: ${redirectBaseUrl}`, 'OIDC');
 
         // Exchange authorization code for tokens
         const currentUrl = new URL(`${redirectBaseUrl}/api/auth/oidc/callback/${providerId}?code=${code}&state=${state}`);
@@ -125,7 +136,11 @@ export function createOIDCRoutes(
           }
         });
       } catch (error) {
-        logger.error(`OIDC token exchange failed for provider ${providerId}: ${error}`, 'OIDC');
+        await logger.error(`OIDC token exchange failed for provider ${providerId}: ${error}`, 'OIDC');
+        if (error instanceof Error) {
+          await logger.error(`Token exchange error details: ${error.message}`, 'OIDC');
+          await logger.error(`Token exchange error stack: ${error.stack}`, 'OIDC');
+        }
         set.status = 400;
         return { error: 'Failed to exchange authorization code for tokens' };
       }
