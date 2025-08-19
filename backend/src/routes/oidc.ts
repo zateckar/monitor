@@ -1,5 +1,5 @@
 import { Elysia } from 'elysia';
-import { serialize as serializeCookie } from 'cookie';
+import { serialize as serializeCookie, parse as parseCookie } from 'cookie';
 import * as openidClient from 'openid-client';
 import { Database } from 'bun:sqlite';
 import { OIDCService } from '../services/oidc';
@@ -21,51 +21,48 @@ export function createOIDCRoutes(
     .get('/auth/oidc/login/:providerId', async ({ params, set }) => {
       const { providerId } = params;
       
-      const config = await oidcService.getOIDCConfig(parseInt(providerId));
-      if (!config) {
+      // Get provider scopes and redirect URL
+      const provider = db.query('SELECT scopes, redirect_base_url FROM oidc_providers WHERE id = ? AND is_active = 1').get(providerId) as any;
+      if (!provider) {
         set.status = 404;
         return { error: 'OIDC provider not found or inactive' };
       }
 
-      // Get provider scopes and redirect URL
-      const provider = db.query('SELECT scopes, redirect_base_url FROM oidc_providers WHERE id = ?').get(providerId) as any;
-      const scopes = provider?.scopes || 'openid profile email';
-      const redirectBaseUrl = provider?.redirect_base_url || 'http://localhost:3001';
+      const scopes = provider.scopes || 'openid profile email';
+      const redirectBaseUrl = provider.redirect_base_url || 'http://localhost:3001';
 
-      // Generate state and code verifier using the service (this will store them properly)
-      const stateInfo = oidcService.generateAuthorizationUrl(parseInt(providerId), redirectBaseUrl, scopes);
-      if (!stateInfo) {
+      // Generate authorization URL using the new stateless method following reference implementation
+      const authResult = await oidcService.generateAuthorizationUrl(parseInt(providerId), redirectBaseUrl, scopes);
+      if (!authResult) {
         set.status = 500;
         return { error: 'Failed to generate authorization URL' };
       }
 
-      const { state } = stateInfo;
-      
-      // Get the code verifier that was already generated and stored by the service
-      const storedStateData = oidcService.getStoredState(state);
-      if (!storedStateData || !storedStateData.code_verifier) {
-        set.status = 500;
-        return { error: 'Failed to retrieve stored state data' };
-      }
+      // Store session data in cookies (following reference implementation pattern)
+      const sessionData = {
+        provider_id: parseInt(providerId),
+        code_verifier: authResult.code_verifier,
+        nonce: authResult.nonce,
+        expires_at: Date.now() + 10 * 60 * 1000 // 10 minutes
+      };
 
-      const codeChallenge = await openidClient.calculatePKCECodeChallenge(storedStateData.code_verifier);
-
-      // Generate authorization URL using new v6.x API
-      const authUrl = openidClient.buildAuthorizationUrl(config, {
-        redirect_uri: `${redirectBaseUrl}/api/auth/oidc/callback/${providerId}`,
-        scope: scopes,
-        state,
-        code_challenge: codeChallenge,
-        code_challenge_method: 'S256',
+      const sessionCookie = serializeCookie('oidc_session', JSON.stringify(sessionData), {
+        httpOnly: true,
+        secure: false, // Set to true in production with HTTPS
+        sameSite: 'lax',
+        maxAge: 10 * 60, // 10 minutes
+        path: '/'
       });
 
-      logger.info(`OIDC login initiated for provider ${providerId}`, 'OIDC');
+      set.headers['Set-Cookie'] = sessionCookie;
 
-      return { authorization_url: authUrl.href };
+      logger.info(`OIDC login initiated for provider ${providerId} with PKCE (no state parameter, following reference implementation)`, 'OIDC');
+
+      return { authorization_url: authResult.authUrl };
     })
-    .get('/auth/oidc/callback/:providerId', async ({ params, query, set }) => {
+    .get('/auth/oidc/callback/:providerId', async ({ params, query, set, request }) => {
       const { providerId } = params;
-      const { code, state, error, error_description } = query as any;
+      const { code, error, error_description } = query as any;
 
       // Log the incoming callback request for debugging
       await logger.info(`OIDC callback received for provider ${providerId}`, 'OIDC');
@@ -77,44 +74,64 @@ export function createOIDCRoutes(
         return { error: `OIDC authentication failed: ${error_description || error}` };
       }
 
-      if (!code || !state) {
-        await logger.error(`Missing required parameters - code: ${!!code}, state: ${!!state}`, 'OIDC');
+      if (!code) {
+        await logger.error(`Missing required parameter - code: ${!!code}`, 'OIDC');
         set.status = 400;
-        return { error: 'Missing authorization code or state parameter' };
+        return { error: 'Missing authorization code parameter' };
       }
 
       try {
-        await logger.info(`Validating state: ${state} for provider: ${providerId}`, 'OIDC');
+        // Retrieve session data from cookies (following reference implementation pattern)
+        const cookies = parseCookie(request.headers.get('cookie') || '');
+        const oidcSessionCookie = cookies.oidc_session;
         
-        const stateValidation = await oidcService.validateStateAndGetConfig(state, parseInt(providerId));
-        if (!stateValidation) {
-          await logger.error(`State validation failed for state: ${state}, provider: ${providerId}`, 'OIDC');
+        if (!oidcSessionCookie) {
+          await logger.error(`No OIDC session found for provider ${providerId}`, 'OIDC');
           set.status = 400;
-          return { error: 'Invalid or expired state parameter' };
+          return { error: 'No OIDC session found. Please restart the authentication process.' };
         }
 
-        const { config, codeVerifier } = stateValidation;
-        await logger.info(`State validation successful, code verifier length: ${codeVerifier?.length || 0}`, 'OIDC');
-
-        // Get provider for redirect URL
-        const provider = db.query('SELECT redirect_base_url FROM oidc_providers WHERE id = ?').get(providerId) as any;
-        const redirectBaseUrl = provider?.redirect_base_url || 'http://localhost:3001';
-        
-        await logger.info(`Using redirect base URL: ${redirectBaseUrl}`, 'OIDC');
-
-        // Exchange authorization code for tokens
-        // Construct the complete callback URL with all query parameters
-        const callbackUrl = new URL(`${redirectBaseUrl}/api/auth/oidc/callback/${providerId}`);
-        
-        // Add all the query parameters from the original callback
-        for (const [key, value] of Object.entries(query)) {
-          if (value) {
-            callbackUrl.searchParams.set(key, String(value));
-          }
+        let sessionData;
+        try {
+          sessionData = JSON.parse(oidcSessionCookie);
+        } catch (e) {
+          await logger.error(`Invalid OIDC session data for provider ${providerId}`, 'OIDC');
+          set.status = 400;
+          return { error: 'Invalid session data. Please restart the authentication process.' };
         }
-        
-        const redirectUri = `${redirectBaseUrl}/api/auth/oidc/callback/${providerId}`;
-        const userInfo = await oidcService.handleTokenExchange(config, callbackUrl, codeVerifier, redirectUri);
+
+        // Validate session data
+        if (sessionData.provider_id !== parseInt(providerId)) {
+          await logger.error(`Provider mismatch in session data: expected ${providerId}, got ${sessionData.provider_id}`, 'OIDC');
+          set.status = 400;
+          return { error: 'Provider mismatch in session data' };
+        }
+
+        if (sessionData.expires_at < Date.now()) {
+          await logger.error(`Expired session for provider ${providerId}`, 'OIDC');
+          set.status = 400;
+          return { error: 'Session expired. Please restart the authentication process.' };
+        }
+
+        // Get OIDC configuration
+        const config = await oidcService.getOIDCConfig(parseInt(providerId));
+        if (!config) {
+          await logger.error(`Failed to get OIDC config for provider ${providerId}`, 'OIDC');
+          set.status = 500;
+          return { error: 'Failed to get OIDC configuration' };
+        }
+
+        await logger.info(`Session validation successful for provider ${providerId}`, 'OIDC');
+        await logger.info(`Code verifier: present, Nonce: ${sessionData.nonce ? 'present' : 'absent'}`, 'OIDC');
+
+        // Perform token exchange using the session data (following reference implementation exactly)
+        await logger.info(`Using callback URL: ${request.url}`, 'OIDC');
+        const userInfo = await oidcService.handleTokenExchange(
+          config, 
+          request.url, 
+          sessionData.code_verifier, 
+          sessionData.nonce
+        );
 
         // Find or create user
         const user = await oidcService.findOrCreateUser(parseInt(providerId), userInfo);
@@ -122,8 +139,8 @@ export function createOIDCRoutes(
         // Generate JWT token
         const token = authService.generateToken(user);
 
-        // Set HTTP-only cookie for web clients
-        const cookieValue = serializeCookie('auth_token', token, {
+        // Set HTTP-only cookie for web clients and clear session cookie
+        const authCookie = serializeCookie('auth_token', token, {
           httpOnly: true,
           secure: false, // Set to true in production with HTTPS
           sameSite: 'lax',
@@ -131,20 +148,35 @@ export function createOIDCRoutes(
           path: '/'
         });
 
-        set.headers['Set-Cookie'] = cookieValue;
+        const clearSessionCookie = serializeCookie('oidc_session', '', {
+          httpOnly: true,
+          secure: false,
+          sameSite: 'lax',
+          maxAge: 0, // Clear the cookie
+          path: '/'
+        });
+
+        set.headers['Set-Cookie'] = authCookie;
 
         logger.info(`User "${user.username}" logged in successfully via OIDC provider ${providerId}`, 'OIDC');
 
         // Redirect to frontend
         set.status = 302;
         set.headers['Location'] = '/?oidc_login=success';
-        return new Response(null, { 
+        
+        // Clear the session cookie by setting it with an expired date
+        const response = new Response(null, { 
           status: 302, 
           headers: {
             'Location': '/?oidc_login=success',
-            'Set-Cookie': cookieValue
+            'Set-Cookie': authCookie
           }
         });
+        
+        // Add the clear session cookie header
+        response.headers.append('Set-Cookie', clearSessionCookie);
+        
+        return response;
       } catch (error) {
         await logger.error(`OIDC token exchange failed for provider ${providerId}: ${error}`, 'OIDC');
         if (error instanceof Error) {
@@ -174,13 +206,14 @@ export function createOIDCRoutes(
         });
       }
       
-      const { name, issuer_url, client_id, client_secret, scopes, redirect_base_url } = body as {
+      const { name, issuer_url, client_id, client_secret, scopes, redirect_base_url, use_pkce } = body as {
         name: string;
         issuer_url: string;
         client_id: string;
         client_secret: string;
         scopes?: string;
         redirect_base_url?: string;
+        use_pkce?: boolean;
       };
 
       if (!name || !issuer_url || !client_id || !client_secret) {
@@ -199,7 +232,7 @@ export function createOIDCRoutes(
         });
       }
 
-      const result = db.run('INSERT INTO oidc_providers (name, issuer_url, client_id, client_secret, scopes, redirect_base_url, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)', [name, issuer_url, client_id, client_secret, scopes || 'openid profile email', redirect_base_url || 'http://localhost:3001', true]);
+      const result = db.run('INSERT INTO oidc_providers (name, issuer_url, client_id, client_secret, scopes, redirect_base_url, use_pkce, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [name, issuer_url, client_id, client_secret, scopes || 'openid profile email', redirect_base_url || 'http://localhost:3001', use_pkce !== false, true]);
 
       const newProvider = db.query('SELECT * FROM oidc_providers WHERE id = ?').get(result.lastInsertRowid) as any;
       
@@ -223,13 +256,14 @@ export function createOIDCRoutes(
         });
       }
       
-      const { name, issuer_url, client_id, client_secret, scopes, redirect_base_url, is_active } = body as {
+      const { name, issuer_url, client_id, client_secret, scopes, redirect_base_url, use_pkce, is_active } = body as {
         name?: string;
         issuer_url?: string;
         client_id?: string;
         client_secret?: string;
         scopes?: string;
         redirect_base_url?: string;
+        use_pkce?: boolean;
         is_active?: boolean;
       };
 
@@ -258,13 +292,14 @@ export function createOIDCRoutes(
       }
 
       // Update provider
-      db.run('UPDATE oidc_providers SET name = ?, issuer_url = ?, client_id = ?, client_secret = ?, scopes = ?, redirect_base_url = ?, is_active = ? WHERE id = ?', [
+      db.run('UPDATE oidc_providers SET name = ?, issuer_url = ?, client_id = ?, client_secret = ?, scopes = ?, redirect_base_url = ?, use_pkce = ?, is_active = ? WHERE id = ?', [
         name || currentProvider.name,
         issuer_url || currentProvider.issuer_url,
         client_id || currentProvider.client_id,
         client_secret || currentProvider.client_secret,
         scopes || currentProvider.scopes,
         redirect_base_url || currentProvider.redirect_base_url,
+        use_pkce !== undefined ? use_pkce : currentProvider.use_pkce,
         is_active !== undefined ? is_active : currentProvider.is_active,
         id
       ]);

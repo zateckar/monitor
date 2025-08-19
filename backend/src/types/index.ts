@@ -23,6 +23,7 @@ export interface OIDCProvider {
   client_secret: string;
   scopes: string;
   redirect_base_url: string;
+  use_pkce: boolean;
   is_active: boolean;
   created_at: string;
 }

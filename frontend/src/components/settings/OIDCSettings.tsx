@@ -46,6 +46,7 @@ const OIDCSettings: React.FC = () => {
     client_secret: '',
     scopes: 'openid profile email',
     redirect_base_url: window.location.origin,
+    use_pkce: true,
     is_active: true,
   });
 
@@ -83,6 +84,7 @@ const OIDCSettings: React.FC = () => {
         client_secret: provider.client_secret,
         scopes: provider.scopes,
         redirect_base_url: provider.redirect_base_url,
+        use_pkce: provider.use_pkce,
         is_active: provider.is_active,
       });
     } else {
@@ -94,6 +96,7 @@ const OIDCSettings: React.FC = () => {
         client_secret: '',
         scopes: 'openid profile email',
         redirect_base_url: window.location.origin,
+        use_pkce: true,
         is_active: true,
       });
     }
@@ -342,6 +345,16 @@ const OIDCSettings: React.FC = () => {
               onChange={(e) => handleInputChange('redirect_base_url', e.target.value)}
               required
               helperText="The base URL where this application is accessible (e.g., https://monitoring.example.com)"
+            />
+
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={formData.use_pkce}
+                  onChange={(e) => handleInputChange('use_pkce', e.target.checked)}
+                />
+              }
+              label="Use PKCE (Proof Key for Code Exchange)"
             />
 
             <FormControlLabel

@@ -3,14 +3,35 @@ import * as openidClient from 'openid-client';
 import type { OIDCProvider } from '../types';
 import { LoggerService } from './logger';
 
+interface UserClaims {
+  sub: string;
+  email?: string;
+  preferred_username?: string;
+  name?: string;
+  nonce?: string;
+  [key: string]: any;
+}
+
+interface TokenExchangeResult {
+  sub: string;
+  email?: string;
+  preferred_username?: string;
+  name?: string;
+  [key: string]: any;
+}
+
+// Constants for better maintainability
+const TOKEN_EXCHANGE_CONTEXT = 'OIDC-TokenExchange';
+const ERRORS = {
+  NO_CLAIMS: 'No claims found in ID token',
+  NONCE_MISMATCH: 'ID token nonce validation failed - potential replay attack',
+  INVALID_URL: 'Invalid URL provided for token exchange'
+} as const;
+
 export class OIDCService {
   private oidcConfigs = new Map<number, any>();
-  private oidcStates = new Map<string, { provider_id: number, expires_at: number, code_verifier?: string }>();
 
-  constructor(private db: Database, private logger: LoggerService) {
-    // Clean up expired states every 5 minutes
-    setInterval(() => this.cleanupExpiredStates(), 5 * 60 * 1000);
-  }
+  constructor(private db: Database, private logger: LoggerService) {}
 
   async getOIDCConfig(providerId: number): Promise<any | null> {
     // Check if we already have a cached config
@@ -38,131 +59,208 @@ export class OIDCService {
     }
   }
 
-  private cleanupExpiredStates(): void {
-    const now = Date.now();
-    for (const [state, data] of this.oidcStates.entries()) {
-      if (data.expires_at < now) {
-        this.oidcStates.delete(state);
-      }
-    }
-  }
-
-  generateAuthorizationUrl(providerId: number, redirectBaseUrl: string, scopes: string): { authUrl: string, state: string } | null {
-    // Generate state and code verifier for PKCE
-    const state = openidClient.randomNonce();
-    const codeVerifier = openidClient.randomPKCECodeVerifier();
-
-    // Store state and code verifier with expiration (10 minutes)
-    this.oidcStates.set(state, {
-      provider_id: providerId,
-      expires_at: Date.now() + 10 * 60 * 1000,
-      code_verifier: codeVerifier
-    });
-
-    return { authUrl: '', state }; // Will be populated by caller
-  }
-
-  updateStateWithCodeVerifier(state: string, codeVerifier: string): void {
-    const stateData = this.oidcStates.get(state);
-    if (stateData) {
-      stateData.code_verifier = codeVerifier;
-      this.oidcStates.set(state, stateData);
-    }
-  }
-
-  getStoredState(state: string): { provider_id: number, expires_at: number, code_verifier?: string } | undefined {
-    return this.oidcStates.get(state);
-  }
-
-  async validateStateAndGetConfig(state: string, providerId: number): Promise<{ config: any, codeVerifier: string } | null> {
-    // Verify state
-    const stateData = this.oidcStates.get(state);
-    if (!stateData || stateData.provider_id !== providerId) {
-      return null;
-    }
-
-    // Remove used state
-    this.oidcStates.delete(state);
-
-    if (stateData.expires_at < Date.now()) {
-      return null;
-    }
-
-    const config = await this.getOIDCConfig(providerId);
-    if (!config) {
-      return null;
-    }
-
-    return {
-      config,
-      codeVerifier: stateData.code_verifier!
-    };
-  }
-
-  async handleTokenExchange(config: any, callbackUrl: URL, codeVerifier: string, redirectUri: string): Promise<any> {
+  /**
+   * Generates authorization URL following the reference implementation exactly
+   * Note: No state parameter is used, following the reference implementation
+   */
+  async generateAuthorizationUrl(providerId: number, redirectBaseUrl: string, scopes: string): Promise<{ authUrl: string, sessionId: string, code_verifier: string, nonce?: string } | null> {
     try {
-      // Log the token exchange attempt for debugging
-      await this.logger.info(`Attempting token exchange with callback URL: ${callbackUrl.href}`, 'OIDC');
-      await this.logger.info(`Using redirect URI: ${redirectUri}`, 'OIDC');
-      await this.logger.info(`Using code verifier length: ${codeVerifier?.length || 0}`, 'OIDC');
-      await this.logger.info(`Authorization code: ${callbackUrl.searchParams.get('code')}`, 'OIDC');
-
-      // Extract the authorization code from callback URL
-      const authorizationCode = callbackUrl.searchParams.get('code');
-      if (!authorizationCode) {
-        throw new Error('No authorization code found in callback URL');
+      // Get OIDC configuration
+      const config = await this.getOIDCConfig(providerId);
+      if (!config) {
+        return null;
       }
 
-      // Create a clean callback URL for token exchange - only include the redirect_uri, not all query params
-      const cleanCallbackUrl = new URL(redirectUri);
-      cleanCallbackUrl.searchParams.set('code', authorizationCode);
+      // Following reference implementation exactly:
+      // Generate PKCE code verifier and challenge
+      const code_verifier = openidClient.randomPKCECodeVerifier();
+      const code_challenge = await openidClient.calculatePKCECodeChallenge(code_verifier);
+      const code_challenge_method = 'S256';
       
-      // Add state if present (some providers require it)
-      const state = callbackUrl.searchParams.get('state');
-      if (state) {
-        cleanCallbackUrl.searchParams.set('state', state);
+      let nonce: string | undefined;
+
+      // Build authorization parameters following reference implementation exactly
+      const parameters: Record<string, string> = {
+        redirect_uri: `${redirectBaseUrl}/api/auth/oidc/callback/${providerId}`,
+        scope: scopes,
+        code_challenge,
+        code_challenge_method,
+      };
+
+      // We cannot be sure the AS supports PKCE so we're going to use nonce too. 
+      // Use of PKCE is backwards compatible even if the AS doesn't support it which is 
+      // why we're using it regardless. (from reference implementation comments)
+      if (!config.serverMetadata().supportsPKCE()) {
+        nonce = openidClient.randomNonce();
+        parameters.nonce = nonce;
       }
 
-      await this.logger.info(`Clean callback URL for token exchange: ${cleanCallbackUrl.href}`, 'OIDC');
+      // Generate authorization URL
+      const authUrl = openidClient.buildAuthorizationUrl(config, parameters);
 
-      // Exchange authorization code for tokens using openid-client v6.x
-      const tokenSet = await openidClient.authorizationCodeGrant(config, cleanCallbackUrl, {
-        pkceCodeVerifier: codeVerifier,
-        expectedNonce: undefined,
+      // Generate session ID for storing code_verifier and nonce
+      const sessionId = openidClient.randomNonce();
+
+      await this.logger.info(`Generated authorization URL for provider ${providerId} with PKCE (no state parameter, following reference implementation)`, 'OIDC');
+
+      return { 
+        authUrl: authUrl.href, 
+        sessionId, 
+        code_verifier,
+        nonce 
+      };
+    } catch (error) {
+      await this.logger.error(`Failed to generate authorization URL for provider ${providerId}: ${error}`, 'OIDC');
+      return null;
+    }
+  }
+
+  /**
+   * Handles the OIDC token exchange process following the reference implementation exactly
+   */
+  async handleTokenExchange(
+    config: openidClient.Configuration,
+    currentUrl: URL | Request | string,
+    code_verifier: string,
+    nonce?: string
+  ): Promise<TokenExchangeResult> {
+    await this.logger.info(`Token exchange initiated: ${currentUrl.toString()}`, TOKEN_EXCHANGE_CONTEXT);
+    
+    try {
+      // Validate input parameters
+      if (!config) {
+        throw new Error('OIDC configuration is required');
+      }
+      
+      if (!currentUrl) {
+        throw new Error(ERRORS.INVALID_URL);
+      }
+      
+      if (!code_verifier) {
+        throw new Error('PKCE code verifier is required');
+      }
+      
+      // Normalize URL to proper URL object
+      const normalizedUrl = this.normalizeUrl(currentUrl);
+      
+      // Log token exchange attempt
+      await this.logger.info(`Token exchange attempt - URL: ${normalizedUrl.href}, PKCE: enabled, Nonce: ${nonce ? 'present' : 'absent'}`, TOKEN_EXCHANGE_CONTEXT);
+      
+      // Perform the actual token exchange with PKCE verification (following reference implementation exactly)
+      const tokenSet = await openidClient.authorizationCodeGrant(config, normalizedUrl, {
+        pkceCodeVerifier: code_verifier,
+        expectedNonce: nonce,
         idTokenExpected: true,
       });
-
-      await this.logger.info(`Token exchange successful, received token set`, 'OIDC');
-
-      // Get user info from the ID token
-      const claims = tokenSet.claims();
-      if (!claims) {
-        throw new Error('No claims found in ID token');
-      }
-
-      let userInfo: any = claims;
-
-      // If we have an access token, try to get additional user info
-      if (tokenSet.access_token && claims.sub) {
-        try {
-          const additionalUserInfo = await openidClient.fetchUserInfo(config, tokenSet.access_token, claims.sub);
-          userInfo = { ...claims, ...additionalUserInfo };
-        } catch (err) {
-          await this.logger.warn(`Failed to fetch additional user info: ${err}`, 'OIDC');
-        }
-      }
-
+      
+      // Extract and validate claims
+      const claims = this.extractAndValidateClaims(tokenSet, nonce);
+      
+      // Fetch additional user information if possible
+      const userInfo = await this.fetchCompleteUserInfo(config, tokenSet, claims);
+      
+      await this.logger.info(`Token exchange completed successfully for subject: ${claims.sub}`, TOKEN_EXCHANGE_CONTEXT);
+      
       return userInfo;
     } catch (error) {
-      // Enhanced error logging
-      await this.logger.error(`Token exchange failed with detailed error: ${error}`, 'OIDC');
-      if (error instanceof Error) {
-        await this.logger.error(`Error message: ${error.message}`, 'OIDC');
-        await this.logger.error(`Error stack: ${error.stack}`, 'OIDC');
-      }
-      
-      // Re-throw the error to be caught by the route handler
+      await this.handleTokenExchangeError(error, currentUrl, nonce);
       throw error;
+    }
+  }
+
+  /**
+   * Converts URL input to proper URL object for openid-client
+   */
+  private normalizeUrl(currentUrl: URL | Request | string): URL {
+    if (currentUrl instanceof URL) {
+      return currentUrl;
+    }
+    
+    if (typeof currentUrl === 'string') {
+      try {
+        return new URL(currentUrl);
+      } catch {
+        throw new Error(`${ERRORS.INVALID_URL}: ${currentUrl}`);
+      }
+    }
+    
+    // It's a Request object
+    try {
+      return new URL(currentUrl.url);
+    } catch {
+      throw new Error(`${ERRORS.INVALID_URL}: ${currentUrl.url}`);
+    }
+  }
+
+  /**
+   * Extracts and validates claims from the token set
+   */
+  private extractAndValidateClaims(tokenSet: any, expectedNonce?: string): UserClaims {
+    const claims = tokenSet.claims();
+    if (!claims) {
+      throw new Error(ERRORS.NO_CLAIMS);
+    }
+    
+    // Validate required subject claim
+    if (!claims.sub) {
+      throw new Error('Missing required "sub" claim in ID token');
+    }
+    
+    // Validate nonce if expected
+    if (expectedNonce && claims.nonce !== expectedNonce) {
+      throw new Error(ERRORS.NONCE_MISMATCH);
+    }
+    
+    return claims as UserClaims;
+  }
+
+  /**
+   * Fetches complete user information by combining ID token claims with userinfo endpoint data
+   */
+  private async fetchCompleteUserInfo(
+    config: openidClient.Configuration,
+    tokenSet: any,
+    claims: UserClaims
+  ): Promise<TokenExchangeResult> {
+    let userInfo: TokenExchangeResult = { ...claims };
+    
+    // Attempt to fetch additional user info from userinfo endpoint
+    if (tokenSet.access_token && claims.sub) {
+      try {
+        const additionalUserInfo = await openidClient.fetchUserInfo(config, tokenSet.access_token, claims.sub);
+        userInfo = { ...claims, ...additionalUserInfo };
+        await this.logger.debug(`Successfully fetched additional user info for subject: ${claims.sub}`, TOKEN_EXCHANGE_CONTEXT);
+      } catch (err) {
+        // Log as debug since this is not critical for authentication
+        await this.logger.debug(`Failed to fetch additional user info: ${err}`, TOKEN_EXCHANGE_CONTEXT);
+      }
+    }
+    
+    return userInfo;
+  }
+
+  /**
+   * Handles and logs token exchange errors with detailed information
+   */
+  private async handleTokenExchangeError(error: unknown, currentUrl: URL | Request | string, nonce?: string): Promise<void> {
+    const urlString = typeof currentUrl === 'string' ? currentUrl : 
+                     currentUrl instanceof URL ? currentUrl.href : currentUrl.url;
+    
+    if (error instanceof Error) {
+      const errorDetails = [
+        `URL: ${urlString}`,
+        `Message: ${error.message}`,
+        `Has Nonce: ${!!nonce}`
+      ].join(', ');
+      
+      await this.logger.error(`Token exchange failed - ${errorDetails}`, TOKEN_EXCHANGE_CONTEXT);
+      
+      // Log stack trace only in development or for specific error types
+      if (process.env.NODE_ENV === 'development' || error.message.includes('fetch')) {
+        await this.logger.debug(`Stack trace: ${error.stack}`, TOKEN_EXCHANGE_CONTEXT);
+      }
+    } else {
+      await this.logger.error(`Token exchange failed with unknown error: ${error}`, TOKEN_EXCHANGE_CONTEXT);
     }
   }
 

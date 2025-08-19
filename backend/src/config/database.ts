@@ -133,6 +133,7 @@ function createTables(db: Database): void {
       client_secret TEXT NOT NULL,
       scopes TEXT DEFAULT 'openid profile email',
       redirect_base_url TEXT DEFAULT 'http://localhost:3001',
+      use_pkce BOOLEAN DEFAULT true,
       is_active BOOLEAN DEFAULT true,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
@@ -156,6 +157,20 @@ function createTables(db: Database): void {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // OIDC state storage for persistent authentication flows
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS oidc_states (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      state TEXT UNIQUE NOT NULL,
+      provider_id INTEGER NOT NULL,
+      code_verifier TEXT,
+      nonce TEXT,
+      expires_at INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(provider_id) REFERENCES oidc_providers(id) ON DELETE CASCADE
+    )
+  `);
 }
 
 function runMigrations(db: Database): void {
@@ -168,6 +183,7 @@ function runMigrations(db: Database): void {
     'ALTER TABLE endpoints ADD COLUMN client_cert_ca TEXT',
     'ALTER TABLE endpoints ADD COLUMN last_checked DATETIME',
     'ALTER TABLE oidc_providers ADD COLUMN redirect_base_url TEXT DEFAULT \'http://localhost:3001\'',
+    'ALTER TABLE oidc_providers ADD COLUMN use_pkce BOOLEAN DEFAULT true',
     'ALTER TABLE endpoints ADD COLUMN kafka_consumer_read_single BOOLEAN DEFAULT false',
     'ALTER TABLE endpoints ADD COLUMN kafka_consumer_auto_commit BOOLEAN DEFAULT true'
   ];
