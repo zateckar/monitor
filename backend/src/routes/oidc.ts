@@ -103,8 +103,17 @@ export function createOIDCRoutes(
         await logger.info(`Using redirect base URL: ${redirectBaseUrl}`, 'OIDC');
 
         // Exchange authorization code for tokens
-        const redirectUri = `${redirectBaseUrl}/api/auth/oidc/callback/${providerId}`;
-        const userInfo = await oidcService.handleTokenExchange(config, code, redirectUri, codeVerifier, state);
+        // Construct the complete callback URL with all query parameters
+        const callbackUrl = new URL(`${redirectBaseUrl}/api/auth/oidc/callback/${providerId}`);
+        
+        // Add all the query parameters from the original callback
+        for (const [key, value] of Object.entries(query)) {
+          if (value) {
+            callbackUrl.searchParams.set(key, String(value));
+          }
+        }
+        
+        const userInfo = await oidcService.handleTokenExchange(config, callbackUrl, codeVerifier);
 
         // Find or create user
         const user = await oidcService.findOrCreateUser(parseInt(providerId), userInfo);

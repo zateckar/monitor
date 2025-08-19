@@ -99,20 +99,16 @@ export class OIDCService {
     };
   }
 
-  async handleTokenExchange(config: any, code: string, redirectUri: string, codeVerifier: string, state: string): Promise<any> {
+  async handleTokenExchange(config: any, callbackUrl: URL, codeVerifier: string): Promise<any> {
     try {
       // Log the token exchange attempt for debugging
-      await this.logger.info(`Attempting token exchange with redirect URI: ${redirectUri}`, 'OIDC');
+      await this.logger.info(`Attempting token exchange with callback URL: ${callbackUrl.href}`, 'OIDC');
       await this.logger.info(`Using code verifier length: ${codeVerifier?.length || 0}`, 'OIDC');
-      await this.logger.info(`Authorization code: ${code}`, 'OIDC');
+      await this.logger.info(`Authorization code: ${callbackUrl.searchParams.get('code')}`, 'OIDC');
 
       // Exchange authorization code for tokens using openid-client v6.x
-      // Create the callback URL with code and state parameters as received
-      const currentUrl = new URL(redirectUri);
-      currentUrl.searchParams.set('code', code);
-      currentUrl.searchParams.set('state', state);
-      
-      const tokenSet = await openidClient.authorizationCodeGrant(config, currentUrl, {
+      // Use the exact callback URL as received from the OIDC provider
+      const tokenSet = await openidClient.authorizationCodeGrant(config, callbackUrl, {
         pkceCodeVerifier: codeVerifier,
         expectedNonce: undefined,
         idTokenExpected: true,
