@@ -1,20 +1,24 @@
 import ping from 'ping';
 import net from 'net';
-import tls from 'tls';
 import https from 'https';
 import { Database } from 'bun:sqlite';
 import type { Endpoint } from '../types';
 import { LoggerService } from './logger';
 import { KafkaService } from './kafka';
+import { CertificateService } from './certificate';
+import { DEFAULT_CERT_CHECK_INTERVAL } from '../config/constants';
 
 export class MonitoringService {
   // Store active timers for each endpoint
   private endpointTimers = new Map<number, NodeJS.Timeout>();
+  // Store active certificate check timers for each endpoint
+  private certificateTimers = new Map<number, NodeJS.Timeout>();
 
   constructor(
     private db: Database, 
     private logger: LoggerService, 
     private kafkaService: KafkaService,
+    private certificateService: CertificateService,
     private sendNotification: (endpoint: Endpoint, status: string) => Promise<void>
   ) {}
 
@@ -43,65 +47,6 @@ export class MonitoringService {
     }
   }
 
-  // Function to get SSL certificate expiry
-  private async getCertificateExpiry(hostname: string): Promise<{ daysRemaining: number } | null> {
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        socket?.destroy();
-        resolve(null);
-      }, 10000); // 10 second timeout
-
-      let socket: tls.TLSSocket | null = null;
-      
-      try {
-        socket = tls.connect({
-          host: hostname,
-          port: 443,
-          servername: hostname,
-          timeout: 8000, // 8 second connection timeout
-          rejectUnauthorized: false // Don't reject self-signed or invalid certs, we just want expiry info
-        }, () => {
-          clearTimeout(timeout);
-          
-          try {
-            const cert = socket?.getPeerCertificate();
-            if (cert && cert.valid_to) {
-              const validTo = new Date(cert.valid_to);
-              const daysRemaining = Math.ceil((validTo.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-              resolve({ daysRemaining });
-            } else {
-              resolve(null);
-            }
-          } catch (err) {
-            // Error getting certificate info, just return null
-            resolve(null);
-          } finally {
-            socket?.end();
-          }
-        });
-
-        socket.on('error', () => {
-          // On any TLS/SSL error, just resolve with null
-          // This prevents the application from crashing on problematic certificates
-          clearTimeout(timeout);
-          socket?.destroy();
-          resolve(null);
-        });
-
-        socket.on('timeout', () => {
-          clearTimeout(timeout);
-          socket?.destroy();
-          resolve(null);
-        });
-        
-      } catch (err) {
-        // Any other error during connection setup
-        clearTimeout(timeout);
-        socket?.destroy();
-        resolve(null);
-      }
-    });
-  }
 
   // Function to check a single endpoint
   async checkSingleEndpoint(endpoint: Endpoint): Promise<void> {
@@ -118,21 +63,6 @@ export class MonitoringService {
     try {
       switch (endpoint.type) {
         case 'http':
-          if (endpoint.check_cert_expiry) {
-            try {
-              const hostname = new URL(endpoint.url).hostname;
-              const certDetails = await this.getCertificateExpiry(hostname);
-              if (certDetails && certDetails.daysRemaining !== undefined) {
-                const daysRemaining = certDetails.daysRemaining;
-                if (daysRemaining <= endpoint.cert_expiry_threshold!) {
-                  await this.sendNotification(endpoint, `Certificate for ${endpoint.url} is expiring in ${daysRemaining} days.`);
-                }
-              }
-            } catch (err) {
-              console.info(`Could not check SSL certificate for ${endpoint.url} - this is normal for sites with certificate issues`);
-            }
-          }
-          
           const headers = endpoint.http_headers ? JSON.parse(endpoint.http_headers) : undefined;
           const body = endpoint.http_body;
           const method = endpoint.http_method || 'GET';
@@ -292,6 +222,120 @@ export class MonitoringService {
     }
   }
 
+  // Function to check certificate expiration for a single endpoint
+  async checkCertificateExpiry(endpoint: Endpoint): Promise<void> {
+    // Skip if endpoint is paused or certificate checking is disabled
+    if (endpoint.paused || !endpoint.check_cert_expiry || endpoint.type !== 'http') {
+      return;
+    }
+
+    try {
+      await this.logger.debug(`Checking certificate expiry for ${endpoint.url}`, 'CERTIFICATE');
+      const certResult = await this.certificateService.getCertificateExpiry(endpoint.url);
+      
+      if (certResult.success) {
+        const daysRemaining = certResult.result.daysRemaining;
+        const expiryDate = certResult.result.validTo.toISOString();
+        
+        await this.logger.debug(`Certificate check successful for ${endpoint.url} - expires in ${daysRemaining} days`, 'CERTIFICATE');
+        
+        // Update certificate information in database
+        this.db.run(
+          'UPDATE endpoints SET cert_expires_in = ?, cert_expiry_date = ? WHERE id = ?',
+          [daysRemaining, expiryDate, endpoint.id]
+        );
+        
+        if (daysRemaining <= (endpoint.cert_expiry_threshold || 30)) {
+          await this.logger.warn(`Certificate expiring soon for ${endpoint.url} - ${daysRemaining} days remaining`, 'CERTIFICATE');
+          await this.sendNotification(endpoint, `Certificate for ${endpoint.url} is expiring in ${daysRemaining} days.`);
+        }
+      } else {
+        // Log the specific error details for debugging
+        await this.logger.warn(`Certificate check failed for ${endpoint.url}: ${certResult.error.error} - ${certResult.error.details}`, 'CERTIFICATE');
+        
+        // Clear certificate information on failure
+        this.db.run(
+          'UPDATE endpoints SET cert_expires_in = NULL, cert_expiry_date = NULL WHERE id = ?',
+          [endpoint.id]
+        );
+      }
+    } catch (err) {
+      await this.logger.error(`Unexpected error during certificate check for ${endpoint.url}: ${err}`, 'CERTIFICATE');
+      
+      // Clear certificate information on error
+      this.db.run(
+        'UPDATE endpoints SET cert_expires_in = NULL, cert_expiry_date = NULL WHERE id = ?',
+        [endpoint.id]
+      );
+    }
+  }
+
+  // Function to start certificate monitoring for a single endpoint
+  startCertificateMonitoring(endpoint: Endpoint): void {
+    // Clear existing certificate timer if any
+    if (this.certificateTimers.has(endpoint.id)) {
+      clearTimeout(this.certificateTimers.get(endpoint.id)!);
+    }
+
+    // Don't start certificate monitoring if endpoint is paused, not HTTP, or certificate checking is disabled
+    if (endpoint.paused || endpoint.type !== 'http' || !endpoint.check_cert_expiry) {
+      return;
+    }
+
+    // Bind the checkCertificateExpiry to the current context
+    const boundCertCheck = this.checkCertificateExpiry.bind(this);
+
+    const scheduleCertCheck = () => {
+      const intervalSeconds = (endpoint.cert_check_interval && endpoint.cert_check_interval > 0) 
+        ? endpoint.cert_check_interval 
+        : DEFAULT_CERT_CHECK_INTERVAL;
+
+      const timer = setTimeout(async () => {
+        try {
+          const currentEndpoint = this.db.query('SELECT paused, check_cert_expiry FROM endpoints WHERE id = ?').get(endpoint.id) as any;
+          if (!currentEndpoint?.paused && currentEndpoint?.check_cert_expiry) {
+            await boundCertCheck(endpoint);
+          } else {
+            await this.logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) certificate monitoring stopped - endpoint paused or cert checking disabled`, 'CERTIFICATE');
+            this.stopCertificateMonitoring(endpoint.id);
+            return;
+          }
+        } catch (err) {
+          await this.logger.error(`Error checking certificate for endpoint ${endpoint.id} (${endpoint.name}): ${err}`, 'CERTIFICATE');
+        }
+        scheduleCertCheck();
+      }, intervalSeconds * 1000);
+
+      this.certificateTimers.set(endpoint.id, timer);
+    };
+
+    // Start the first certificate check immediately
+    (async () => {
+      try {
+        const currentEndpoint = this.db.query('SELECT paused, check_cert_expiry FROM endpoints WHERE id = ?').get(endpoint.id) as any;
+        if (!currentEndpoint?.paused && currentEndpoint?.check_cert_expiry) {
+          await boundCertCheck(endpoint);
+          await this.logger.info(`Started certificate monitoring for "${endpoint.name}" (ID: ${endpoint.id}) with ${(endpoint.cert_check_interval || DEFAULT_CERT_CHECK_INTERVAL) / 3600}h interval`, 'CERTIFICATE');
+        } else {
+          await this.logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) certificate monitoring not started - endpoint paused or cert checking disabled`, 'CERTIFICATE');
+          return;
+        }
+      } catch (err) {
+        await this.logger.error(`Error in initial certificate check for endpoint ${endpoint.id} (${endpoint.name}): ${err}`, 'CERTIFICATE');
+      }
+      scheduleCertCheck();
+    })();
+  }
+
+  // Function to stop certificate monitoring for an endpoint
+  stopCertificateMonitoring(endpointId: number): void {
+    if (this.certificateTimers.has(endpointId)) {
+      clearTimeout(this.certificateTimers.get(endpointId)!);
+      this.certificateTimers.delete(endpointId);
+      this.logger.debug(`Stopped certificate monitoring for endpoint ID: ${endpointId}`, 'CERTIFICATE');
+    }
+  }
+
   // Function to start monitoring for a single endpoint
   startEndpointMonitoring(endpoint: Endpoint): void {
     // Clear existing timer if any
@@ -305,16 +349,17 @@ export class MonitoringService {
       return;
     }
 
+    // Bind the checkSingleEndpoint to the current context
+    const boundCheck = this.checkSingleEndpoint.bind(this);
+
     const scheduleCheck = () => {
-      // Ensure heartbeat_interval is a positive number, default to 60 if invalid
       const intervalSeconds = (endpoint.heartbeat_interval && endpoint.heartbeat_interval > 0) ? endpoint.heartbeat_interval : 60;
 
       const timer = setTimeout(async () => {
         try {
-          // Check if endpoint is still not paused before running check
           const currentEndpoint = this.db.query('SELECT paused FROM endpoints WHERE id = ?').get(endpoint.id) as any;
           if (!currentEndpoint?.paused) {
-            await this.checkSingleEndpoint(endpoint);
+            await boundCheck(endpoint);
           } else {
             await this.logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) was paused - stopping monitoring`, 'MONITORING');
             this.stopEndpointMonitoring(endpoint.id);
@@ -323,19 +368,18 @@ export class MonitoringService {
         } catch (err) {
           await this.logger.error(`Error checking endpoint ${endpoint.id} (${endpoint.name}): ${err}`, 'MONITORING');
         }
-        // Schedule the next check
         scheduleCheck();
       }, intervalSeconds * 1000);
 
       this.endpointTimers.set(endpoint.id, timer);
     };
 
-    // Start the first check immediately, then schedule subsequent checks
-    setTimeout(async () => {
+    // Start the first check immediately
+    (async () => {
       try {
         const currentEndpoint = this.db.query('SELECT paused FROM endpoints WHERE id = ?').get(endpoint.id) as any;
         if (!currentEndpoint?.paused) {
-          await this.checkSingleEndpoint(endpoint);
+          await boundCheck(endpoint);
         } else {
           await this.logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) was paused - not starting monitoring`, 'MONITORING');
           return;
@@ -343,9 +387,8 @@ export class MonitoringService {
       } catch (err) {
         await this.logger.error(`Error in initial check for endpoint ${endpoint.id} (${endpoint.name}): ${err}`, 'MONITORING');
       }
-      // Schedule subsequent checks
       scheduleCheck();
-    }, 1000); // Small delay to avoid overwhelming on startup
+    })();
   }
 
   // Function to stop monitoring for an endpoint
@@ -355,6 +398,9 @@ export class MonitoringService {
       this.endpointTimers.delete(endpointId);
       this.logger.debug(`Stopped monitoring for endpoint ID: ${endpointId}`, 'MONITORING');
     }
+    
+    // Also stop certificate monitoring
+    this.stopCertificateMonitoring(endpointId);
     
     // Cleanup any Kafka connections for this endpoint
     this.kafkaService.cleanupKafkaConnection(endpointId);
@@ -371,6 +417,7 @@ export class MonitoringService {
     if (updatedEndpoint) {
       this.logger.info(`Restarting monitoring for updated endpoint "${updatedEndpoint.name}" (ID: ${endpointId})`, 'MONITORING');
       this.startEndpointMonitoring(updatedEndpoint);
+      this.startCertificateMonitoring(updatedEndpoint);
     } else {
       this.logger.warn(`Could not restart monitoring for endpoint ID: ${endpointId} - endpoint not found in database`, 'MONITORING');
     }
@@ -385,6 +432,7 @@ export class MonitoringService {
       for (const endpoint of endpoints) {
         await this.logger.info(`Starting monitor for "${endpoint.name}" (ID: ${endpoint.id}) with ${endpoint.heartbeat_interval || 60}s interval`, 'MONITORING');
         this.startEndpointMonitoring(endpoint);
+        this.startCertificateMonitoring(endpoint);
       }
     } catch (err) {
       await this.logger.error(`Error initializing monitoring: ${err}`, 'MONITORING');

@@ -44,8 +44,8 @@ export function createEndpointsRoutes(
             uptime_24h: stats24h?.uptime || 0,
             uptime_30d,
             uptime_1y,
-            cert_expires_in: null,
-            cert_expiry_date: null,
+            cert_expires_in: endpoint.cert_expires_in,
+            cert_expiry_date: endpoint.cert_expiry_date,
           };
           return result;
         })

@@ -28,6 +28,7 @@ export interface Endpoint {
   ok_http_statuses?: string[] | null;
   check_cert_expiry?: boolean;
   cert_expiry_threshold?: number;
+  cert_check_interval?: number; // Custom interval for certificate checks in seconds
   keyword_search?: string | null;
 
   // mTLS (Client Certificates) - for HTTP and Kafka

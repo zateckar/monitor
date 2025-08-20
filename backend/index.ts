@@ -76,7 +76,7 @@ async function main() {
   const logger = new LoggerService(db);
   const authService = new AuthService(db);
   const oidcService = new OIDCService(db, logger);
-  const certificateService = new CertificateService();
+  const certificateService = new CertificateService(logger);
   const databaseService = new DatabaseService(db, logger);
   const statusPageService = new StatusPageService(db, logger);
   const staticFileService = new StaticFileService();
@@ -92,9 +92,10 @@ async function main() {
   const kafkaService = new KafkaService(db, logger);
   
   const monitoringService = new MonitoringService(
-    db, 
-    logger, 
+    db,
+    logger,
     kafkaService,
+    certificateService,
     sendNotification
   );
 

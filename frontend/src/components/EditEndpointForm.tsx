@@ -34,6 +34,7 @@ const EditEndpointForm: React.FC<EditEndpointFormProps> = ({ endpoint, onUpdate,
   const [okHttpStatuses, setOkHttpStatuses] = useState('');
   const [checkCertExpiry, setCheckCertExpiry] = useState(false);
   const [certExpiryThreshold, setCertExpiryThreshold] = useState(30);
+  const [certCheckInterval, setCertCheckInterval] = useState(6); // Default 6 hours
   const [keywordSearch, setKeywordSearch] = useState('');
   const [upsideDownMode, setUpsideDownMode] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -115,6 +116,7 @@ const EditEndpointForm: React.FC<EditEndpointFormProps> = ({ endpoint, onUpdate,
       setOkHttpStatuses(endpoint.ok_http_statuses ? endpoint.ok_http_statuses.join(',') : '');
       setCheckCertExpiry(endpoint.check_cert_expiry || false);
       setCertExpiryThreshold(endpoint.cert_expiry_threshold || 30);
+      setCertCheckInterval(endpoint.cert_check_interval ? endpoint.cert_check_interval / 3600 : 6); // Convert seconds to hours
       setKeywordSearch(endpoint.keyword_search || '');
       setUpsideDownMode(endpoint.upside_down_mode);
       setTcpPort(endpoint.tcp_port);
@@ -146,6 +148,7 @@ const EditEndpointForm: React.FC<EditEndpointFormProps> = ({ endpoint, onUpdate,
       ok_http_statuses: okHttpStatuses.split(',').map(s => s.trim()).filter(s => s),
       check_cert_expiry: checkCertExpiry,
       cert_expiry_threshold: certExpiryThreshold,
+      cert_check_interval: certCheckInterval * 3600, // Convert hours to seconds
       keyword_search: keywordSearch || null,
       upside_down_mode: upsideDownMode,
       tcp_port: tcpPort,
@@ -362,6 +365,18 @@ const EditEndpointForm: React.FC<EditEndpointFormProps> = ({ endpoint, onUpdate,
               onChange={(e) => setCertExpiryThreshold(parseInt(e.target.value, 10))}
               sx={{ mt: 2, mb: 2 }}
               disabled={!checkCertExpiry}
+            />
+            <TextField
+              label="Certificate Check Interval (hours)"
+              variant="outlined"
+              type="number"
+              fullWidth
+              value={certCheckInterval}
+              onChange={(e) => setCertCheckInterval(parseInt(e.target.value, 10))}
+              sx={{ mb: 2 }}
+              disabled={!checkCertExpiry}
+              inputProps={{ min: 1, max: 168 }}
+              helperText="How often to check certificate expiration. Default: 6 hours"
             />
           </>
         )}

@@ -325,31 +325,6 @@ const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, onUpdate, onD
           </Card>
         )}
 
-        {/* Data Management Card */}
-        <Card elevation={2}>
-          <CardHeader
-            title={
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <DataUsageIcon color="primary" />
-                <Typography variant="h6">Data Management</Typography>
-              </Box>
-            }
-          />
-          <CardContent sx={{ pt: 0 }}>
-            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-              {typeof endpoint.id === 'number' && (
-                <Button
-                  variant="outlined"
-                  color="warning"
-                  startIcon={<ClearIcon />}
-                  onClick={() => setDeleteHeartbeatsDialogOpen(true)}
-                >
-                  Clear Heartbeats
-                </Button>
-              )}
-            </Box>
-          </CardContent>
-        </Card>
 
         {/* Admin Actions Card */}
         {user?.role === 'admin' && (
@@ -364,6 +339,16 @@ const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, onUpdate, onD
             />
             <CardContent sx={{ pt: 0 }}>
               <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, flexWrap: 'wrap' }}>
+                              {typeof endpoint.id === 'number' && (
+                <Button
+                  variant="outlined"
+                  color="warning"
+                  startIcon={<ClearIcon />}
+                  onClick={() => setDeleteHeartbeatsDialogOpen(true)}
+                >
+                  Clear Heartbeats
+                </Button>
+              )}
                 <Button
                   variant="outlined"
                   color="error"

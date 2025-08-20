@@ -15,6 +15,7 @@ import { OIDCService } from './services/oidc';
 import { KafkaService } from './services/kafka';
 import { MonitoringService } from './services/monitoring';
 import { NotificationService } from './services/notifications';
+import { CertificateService } from './services/certificate';
 
 // Import route handlers
 import { createAuthRoutes, createAuthMiddleware } from './routes/auth';
@@ -32,13 +33,15 @@ async function main() {
   const oidcService = new OIDCService(db, logger);
   const kafkaService = new KafkaService(db, logger);
   const notificationService = new NotificationService(db, logger);
+  const certificateService = new CertificateService(logger);
   
   // Create monitoring service with notification callback
   const monitoringService = new MonitoringService(
     db, 
     logger, 
     kafkaService,
-    (endpoint, status) => notificationService.sendNotification(endpoint, status)
+    certificateService,
+    (endpoint: any, status: string) => notificationService.sendNotification(endpoint, status)
   );
 
   // Create authentication middleware
@@ -149,6 +152,63 @@ async function main() {
       logger.setLogLevel(level);
       console.log('After setLogLevel, current level is:', logger.getLogLevel());
       return { level };
+    }))
+    
+    // Certificate testing API for debugging
+    .post('/api/debug/certificate', requireRole('admin')(async ({ request, set }: any) => {
+      try {
+        let body: any;
+        try {
+          body = await request.json();
+        } catch (error) {
+          set.status = 400;
+          return { error: 'Invalid JSON in request body' };
+        }
+        
+        const { url } = body as { url: string };
+        
+        if (!url) {
+          set.status = 400;
+          return { error: 'URL is required' };
+        }
+        
+        await logger.info(`Manual certificate check requested for: ${url}`, 'CERTIFICATE_DEBUG');
+        
+        const result = await certificateService.getCertificateExpiry(url);
+        
+        if (result.success) {
+          await logger.info(`Certificate check successful for ${url}`, 'CERTIFICATE_DEBUG');
+          return {
+            success: true,
+            url,
+            certificate: {
+              daysRemaining: result.result.daysRemaining,
+              validFrom: result.result.validFrom.toISOString(),
+              validTo: result.result.validTo.toISOString(),
+              issuer: result.result.issuer,
+              subject: result.result.subject
+            }
+          };
+        } else {
+          await logger.warn(`Certificate check failed for ${url}: ${result.error.error}`, 'CERTIFICATE_DEBUG');
+          return {
+            success: false,
+            url,
+            error: result.error
+          };
+        }
+        
+      } catch (error) {
+        await logger.error(`Unexpected error in certificate debug endpoint: ${error}`, 'CERTIFICATE_DEBUG');
+        set.status = 500;
+        return { 
+          success: false, 
+          error: {
+            error: 'Internal server error',
+            details: error instanceof Error ? error.message : 'Unknown error'
+          }
+        };
+      }
     }))
     
     // Database management API

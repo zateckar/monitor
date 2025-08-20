@@ -185,7 +185,10 @@ function runMigrations(db: Database): void {
     'ALTER TABLE oidc_providers ADD COLUMN redirect_base_url TEXT DEFAULT \'http://localhost:3001\'',
     'ALTER TABLE oidc_providers ADD COLUMN use_pkce BOOLEAN DEFAULT true',
     'ALTER TABLE endpoints ADD COLUMN kafka_consumer_read_single BOOLEAN DEFAULT false',
-    'ALTER TABLE endpoints ADD COLUMN kafka_consumer_auto_commit BOOLEAN DEFAULT true'
+    'ALTER TABLE endpoints ADD COLUMN kafka_consumer_auto_commit BOOLEAN DEFAULT true',
+    'ALTER TABLE endpoints ADD COLUMN cert_expires_in INTEGER',
+    'ALTER TABLE endpoints ADD COLUMN cert_expiry_date DATETIME',
+    'ALTER TABLE endpoints ADD COLUMN cert_check_interval INTEGER DEFAULT 21600'
   ];
 
   for (const migration of migrations) {
