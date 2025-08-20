@@ -167,27 +167,71 @@ export class OIDCService {
   }
 
   /**
-   * Converts URL input to proper URL object for openid-client
+   * Converts URL input to proper URL object for openid-client, handling reverse proxy scenarios
    */
   private normalizeUrl(currentUrl: URL | Request | string): URL {
     if (currentUrl instanceof URL) {
-      return currentUrl;
+      return this.ensureProperScheme(currentUrl);
     }
     
     if (typeof currentUrl === 'string') {
       try {
-        return new URL(currentUrl);
+        const url = new URL(currentUrl);
+        return this.ensureProperScheme(url);
       } catch {
         throw new Error(`${ERRORS.INVALID_URL}: ${currentUrl}`);
       }
     }
     
-    // It's a Request object
+    // It's a Request object - need to check for proxy headers
     try {
-      return new URL(currentUrl.url);
+      const url = new URL(currentUrl.url);
+      const correctedUrl = this.ensureProperScheme(url, currentUrl.headers);
+      return correctedUrl;
     } catch {
       throw new Error(`${ERRORS.INVALID_URL}: ${currentUrl.url}`);
     }
+  }
+
+  /**
+   * Ensures the URL has the correct scheme, especially when behind reverse proxies
+   */
+  private ensureProperScheme(url: URL, headers?: Headers): URL {
+    // Check if we're in production and the URL scheme is HTTP
+    if (process.env.NODE_ENV === 'production' && url.protocol === 'http:') {
+      let correctionReason = 'default production behavior';
+      
+      // Check for common reverse proxy headers that indicate the original scheme
+      if (headers) {
+        const forwardedProto = headers.get('x-forwarded-proto');
+        const forwardedScheme = headers.get('x-forwarded-scheme');
+        const forwardedHeader = headers.get('forwarded');
+        
+        // Check X-Forwarded-Proto header (most common)
+        if (forwardedProto === 'https') {
+          correctionReason = 'X-Forwarded-Proto header';
+        }
+        // Check X-Forwarded-Scheme header
+        else if (forwardedScheme === 'https') {
+          correctionReason = 'X-Forwarded-Scheme header';
+        }
+        // Check Forwarded header (RFC 7239)
+        else if (forwardedHeader && forwardedHeader.includes('proto=https')) {
+          correctionReason = 'Forwarded header';
+        }
+      }
+      
+      // Correct the URL scheme to HTTPS
+      const originalUrl = url.href;
+      url.protocol = 'https:';
+      
+      // Log the correction asynchronously to avoid blocking
+      this.logger.info(`Corrected URL scheme from HTTP to HTTPS (${correctionReason}): ${originalUrl} -> ${url.href}`, TOKEN_EXCHANGE_CONTEXT).catch(() => {
+        // Ignore logging errors to prevent them from affecting the main flow
+      });
+    }
+    
+    return url;
   }
 
   /**
