@@ -61,7 +61,6 @@ export class OIDCService {
 
   /**
    * Generates authorization URL following the reference implementation exactly
-   * Note: No state parameter is used, following the reference implementation
    */
   async generateAuthorizationUrl(providerId: number, redirectBaseUrl: string, scopes: string): Promise<{ authUrl: string, sessionId: string, code_verifier: string, nonce?: string } | null> {
     try {
@@ -71,7 +70,6 @@ export class OIDCService {
         return null;
       }
 
-      // Following reference implementation exactly:
       // Generate PKCE code verifier and challenge
       const code_verifier = openidClient.randomPKCECodeVerifier();
       const code_challenge = await openidClient.calculatePKCECodeChallenge(code_verifier);
@@ -79,7 +77,7 @@ export class OIDCService {
       
       let nonce: string | undefined;
 
-      // Build authorization parameters following reference implementation exactly
+      // Build authorization parameters
       const parameters: Record<string, string> = {
         redirect_uri: `${redirectBaseUrl}/api/auth/oidc/callback/${providerId}`,
         scope: scopes,
@@ -89,7 +87,7 @@ export class OIDCService {
 
       // We cannot be sure the AS supports PKCE so we're going to use nonce too. 
       // Use of PKCE is backwards compatible even if the AS doesn't support it which is 
-      // why we're using it regardless. (from reference implementation comments)
+      // why we're using it regardless.
       if (!config.serverMetadata().supportsPKCE()) {
         nonce = openidClient.randomNonce();
         parameters.nonce = nonce;
@@ -101,7 +99,7 @@ export class OIDCService {
       // Generate session ID for storing code_verifier and nonce
       const sessionId = openidClient.randomNonce();
 
-      await this.logger.info(`Generated authorization URL for provider ${providerId} with PKCE (no state parameter, following reference implementation)`, 'OIDC');
+      await this.logger.info(`Generated authorization URL for provider ${providerId} with PKCE`, 'OIDC');
 
       return { 
         authUrl: authUrl.href, 
@@ -116,7 +114,7 @@ export class OIDCService {
   }
 
   /**
-   * Handles the OIDC token exchange process following the reference implementation exactly
+   * Handles the OIDC token exchange process
    */
   async handleTokenExchange(
     config: openidClient.Configuration,
@@ -146,7 +144,7 @@ export class OIDCService {
       // Log token exchange attempt
       await this.logger.info(`Token exchange attempt - URL: ${normalizedUrl.href}, PKCE: enabled, Nonce: ${nonce ? 'present' : 'absent'}`, TOKEN_EXCHANGE_CONTEXT);
       
-      // Perform the actual token exchange with PKCE verification (following reference implementation exactly)
+      // Perform the actual token exchange with PKCE verification
       const tokenSet = await openidClient.authorizationCodeGrant(config, normalizedUrl, {
         pkceCodeVerifier: code_verifier,
         expectedNonce: nonce,

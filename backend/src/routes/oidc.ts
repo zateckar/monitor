@@ -6,6 +6,24 @@ import { OIDCService } from '../services/oidc';
 import { AuthService } from '../services/auth';
 import { LoggerService } from '../services/logger';
 
+// Environment-aware configuration
+const isProduction = process.env.NODE_ENV === 'production';
+const isHTTPS = (url: string): boolean => url.startsWith('https://');
+const getProductionDomain = (): string => {
+  return process.env.PRODUCTION_DOMAIN || 'https://monitor.example.com';
+};
+
+// Cookie security settings based on environment
+const getCookieSecuritySettings = (forceSecure?: boolean) => {
+  const shouldBeSecure = forceSecure || isProduction;
+  return {
+    httpOnly: true,
+    secure: shouldBeSecure,
+    sameSite: 'lax' as const,
+    path: '/'
+  };
+};
+
 export function createOIDCRoutes(
   db: Database,
   oidcService: OIDCService,
@@ -29,16 +47,28 @@ export function createOIDCRoutes(
       }
 
       const scopes = provider.scopes || 'openid profile email';
-      const redirectBaseUrl = provider.redirect_base_url || 'http://localhost:3001';
+      
+      // Use environment-aware redirect base URL configuration
+      let redirectBaseUrl = provider.redirect_base_url;
+      if (!redirectBaseUrl) {
+        redirectBaseUrl = isProduction ? getProductionDomain() : 'http://localhost:3001';
+      }
 
-      // Generate authorization URL using the new stateless method following reference implementation
+      // Validate production URLs use HTTPS
+      if (isProduction && !isHTTPS(redirectBaseUrl)) {
+        await logger.error(`Production redirect base URL must use HTTPS: ${redirectBaseUrl}`, 'OIDC');
+        set.status = 500;
+        return { error: 'Production redirect base URL must use HTTPS' };
+      }
+
+      // Generate authorization URL using the new stateless method
       const authResult = await oidcService.generateAuthorizationUrl(parseInt(providerId), redirectBaseUrl, scopes);
       if (!authResult) {
         set.status = 500;
         return { error: 'Failed to generate authorization URL' };
       }
 
-      // Store session data in cookies (following reference implementation pattern)
+      // Store session data in cookies with environment-aware security
       const sessionData = {
         provider_id: parseInt(providerId),
         code_verifier: authResult.code_verifier,
@@ -46,17 +76,15 @@ export function createOIDCRoutes(
         expires_at: Date.now() + 10 * 60 * 1000 // 10 minutes
       };
 
+      const cookieSettings = getCookieSecuritySettings(isHTTPS(redirectBaseUrl));
       const sessionCookie = serializeCookie('oidc_session', JSON.stringify(sessionData), {
-        httpOnly: true,
-        secure: false, // Set to true in production with HTTPS
-        sameSite: 'lax',
-        maxAge: 10 * 60, // 10 minutes
-        path: '/'
+        ...cookieSettings,
+        maxAge: 10 * 60 // 10 minutes
       });
 
       set.headers['Set-Cookie'] = sessionCookie;
 
-      logger.info(`OIDC login initiated for provider ${providerId} with PKCE (no state parameter, following reference implementation)`, 'OIDC');
+      await logger.info(`OIDC login initiated for provider ${providerId} with PKCE. Redirect URL: ${redirectBaseUrl}, Secure cookies: ${cookieSettings.secure}`, 'OIDC');
 
       return { authorization_url: authResult.authUrl };
     })
@@ -124,7 +152,7 @@ export function createOIDCRoutes(
         await logger.info(`Session validation successful for provider ${providerId}`, 'OIDC');
         await logger.info(`Code verifier: present, Nonce: ${sessionData.nonce ? 'present' : 'absent'}`, 'OIDC');
 
-        // Perform token exchange using the session data (following reference implementation exactly)
+        // Perform token exchange using the session data
         await logger.info(`Using callback URL: ${request.url}`, 'OIDC');
         const userInfo = await oidcService.handleTokenExchange(
           config, 
@@ -140,20 +168,15 @@ export function createOIDCRoutes(
         const token = authService.generateToken(user);
 
         // Set HTTP-only cookie for web clients and clear session cookie
+        const authCookieSettings = getCookieSecuritySettings();
         const authCookie = serializeCookie('auth_token', token, {
-          httpOnly: true,
-          secure: false, // Set to true in production with HTTPS
-          sameSite: 'lax',
-          maxAge: 7 * 24 * 60 * 60, // 7 days
-          path: '/'
+          ...authCookieSettings,
+          maxAge: 7 * 24 * 60 * 60 // 7 days
         });
 
         const clearSessionCookie = serializeCookie('oidc_session', '', {
-          httpOnly: true,
-          secure: false,
-          sameSite: 'lax',
-          maxAge: 0, // Clear the cookie
-          path: '/'
+          ...authCookieSettings,
+          maxAge: 0 // Clear the cookie
         });
 
         set.headers['Set-Cookie'] = authCookie;
@@ -232,7 +255,21 @@ export function createOIDCRoutes(
         });
       }
 
-      const result = db.run('INSERT INTO oidc_providers (name, issuer_url, client_id, client_secret, scopes, redirect_base_url, use_pkce, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [name, issuer_url, client_id, client_secret, scopes || 'openid profile email', redirect_base_url || 'http://localhost:3001', use_pkce !== false, true]);
+      // Environment-aware default redirect base URL with validation
+      let finalRedirectBaseUrl = redirect_base_url;
+      if (!finalRedirectBaseUrl) {
+        finalRedirectBaseUrl = isProduction ? getProductionDomain() : 'http://localhost:3001';
+      }
+      
+      // Validate production URLs use HTTPS
+      if (isProduction && !isHTTPS(finalRedirectBaseUrl)) {
+        return new Response(JSON.stringify({ error: 'Production redirect base URL must use HTTPS' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      const result = db.run('INSERT INTO oidc_providers (name, issuer_url, client_id, client_secret, scopes, redirect_base_url, use_pkce, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [name, issuer_url, client_id, client_secret, scopes || 'openid profile email', finalRedirectBaseUrl, use_pkce !== false, true]);
 
       const newProvider = db.query('SELECT * FROM oidc_providers WHERE id = ?').get(result.lastInsertRowid) as any;
       
@@ -291,6 +328,19 @@ export function createOIDCRoutes(
         }
       }
 
+      // Environment-aware redirect base URL validation
+      let finalRedirectBaseUrl = redirect_base_url || currentProvider.redirect_base_url;
+      if (redirect_base_url !== undefined) {
+        // Validate production URLs use HTTPS
+        if (isProduction && !isHTTPS(redirect_base_url)) {
+          return new Response(JSON.stringify({ error: 'Production redirect base URL must use HTTPS' }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+        finalRedirectBaseUrl = redirect_base_url;
+      }
+
       // Update provider
       db.run('UPDATE oidc_providers SET name = ?, issuer_url = ?, client_id = ?, client_secret = ?, scopes = ?, redirect_base_url = ?, use_pkce = ?, is_active = ? WHERE id = ?', [
         name || currentProvider.name,
@@ -298,7 +348,7 @@ export function createOIDCRoutes(
         client_id || currentProvider.client_id,
         client_secret || currentProvider.client_secret,
         scopes || currentProvider.scopes,
-        redirect_base_url || currentProvider.redirect_base_url,
+        finalRedirectBaseUrl,
         use_pkce !== undefined ? use_pkce : currentProvider.use_pkce,
         is_active !== undefined ? is_active : currentProvider.is_active,
         id

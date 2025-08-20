@@ -21,6 +21,7 @@ services:
       # Application configuration
       - NODE_ENV=production
       - PORT=3001
+      - PRODUCTION_DOMAIN=${PRODUCTION_DOMAIN:-https://monitor.example.com}
       
       # Logging configuration
       - LOG_LEVEL=${LOG_LEVEL:-info}
