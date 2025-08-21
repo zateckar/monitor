@@ -6,7 +6,10 @@ export function initializeDatabase(): Database {
 
   // Create all tables
   createTables(db);
-  
+
+  // Initialize database version tracking
+  initializeDatabaseVersion(db);
+
   // Run migrations to add missing columns
   runMigrations(db);
 
@@ -27,7 +30,7 @@ function createTables(db: Database): void {
       failed_attempts INTEGER DEFAULT 0,
       upside_down_mode BOOLEAN DEFAULT false,
       paused BOOLEAN DEFAULT false,
-      
+
       -- HTTP specific
       http_method TEXT DEFAULT 'GET',
       http_headers TEXT,
@@ -36,6 +39,11 @@ function createTables(db: Database): void {
       check_cert_expiry BOOLEAN DEFAULT false,
       cert_expiry_threshold INTEGER DEFAULT 30,
       keyword_search TEXT,
+
+      -- Certificate monitoring
+      cert_expires_in INTEGER,
+      cert_expiry_date DATETIME,
+      cert_check_interval INTEGER DEFAULT 21600,
 
       -- mTLS (Client Certificates) - for HTTP and Kafka
       client_cert_enabled BOOLEAN DEFAULT false,
@@ -49,7 +57,9 @@ function createTables(db: Database): void {
       -- Kafka specific
       kafka_topic TEXT,
       kafka_message TEXT,
-      kafka_config TEXT
+      kafka_config TEXT,
+      kafka_consumer_read_single BOOLEAN DEFAULT false,
+      kafka_consumer_auto_commit BOOLEAN DEFAULT true
     )
   `);
 
@@ -174,8 +184,22 @@ function createTables(db: Database): void {
 }
 
 function runMigrations(db: Database): void {
-  // Add missing columns to existing endpoints table if they don't exist
+  /**
+   * Database Migrations
+   *
+   * This function handles schema updates for existing databases.
+   * New installations will have complete schemas from table creation.
+   *
+   * Migration Strategy:
+   * - Only run migrations for existing databases that need column additions
+   * - New databases get complete schemas from createTables()
+   * - All migrations use defensive error handling (try-catch)
+   * - Safe to run on both new and existing databases
+   */
+
   const migrations = [
+    // Legacy migrations for databases that may be missing newer columns
+    // These are kept for backward compatibility with existing installations
     'ALTER TABLE endpoints ADD COLUMN paused BOOLEAN DEFAULT false',
     'ALTER TABLE endpoints ADD COLUMN client_cert_enabled BOOLEAN DEFAULT false',
     'ALTER TABLE endpoints ADD COLUMN client_cert_public_key TEXT',
@@ -191,11 +215,46 @@ function runMigrations(db: Database): void {
     'ALTER TABLE endpoints ADD COLUMN cert_check_interval INTEGER DEFAULT 21600'
   ];
 
+  console.log('Running database migrations...');
+
   for (const migration of migrations) {
     try {
       db.exec(migration);
-    } catch (err) {
+      console.log(`✓ Migration executed: ${migration.split('ADD COLUMN')[1]?.trim() || migration}`);
+    } catch (err: any) {
       // Column already exists or other migration issue, ignore error
+      if (err.message?.includes('duplicate column name')) {
+        console.log(`- Column already exists, skipping: ${migration.split('ADD COLUMN')[1]?.trim() || migration}`);
+      } else {
+        console.warn(`⚠ Migration failed (non-critical): ${migration}`, err.message);
+      }
     }
+  }
+
+  console.log('Database migrations completed.');
+}
+
+function initializeDatabaseVersion(db: Database): void {
+  /**
+   * Database Version Tracking
+   *
+   * This function initializes a simple database version tracking system.
+   * It can be used in the future to manage more sophisticated migrations
+   * based on the current database schema version.
+   */
+
+  try {
+    // Insert or update the current database version
+    // This is a simple key-value approach using the system_settings table
+    const currentVersion = '1.0.0'; // Current schema version
+
+    db.exec(`
+      INSERT OR REPLACE INTO system_settings (key, value, updated_at)
+      VALUES ('database_version', '${currentVersion}', CURRENT_TIMESTAMP)
+    `);
+
+    console.log(`Database version set to: ${currentVersion}`);
+  } catch (err: any) {
+    console.warn('Failed to initialize database version (non-critical):', err.message);
   }
 }
