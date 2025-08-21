@@ -1,4 +1,4 @@
-import { Elysia } from 'elysia';
+import { Elysia, t } from 'elysia';
 import { serialize as serializeCookie } from 'cookie';
 import type { User } from '../types';
 import { AuthService } from '../services/auth';
@@ -6,26 +6,8 @@ import { LoggerService } from '../services/logger';
 
 export function createAuthRoutes(authService: AuthService, logger: LoggerService) {
   return new Elysia({ prefix: '/api/auth' })
-    .post('/login', async ({ request, set }) => {
-      let body: any;
-      try {
-        body = await request.json();
-      } catch (error) {
-        set.status = 400;
-        return { error: 'Invalid JSON in request body' };
-      }
-      
-      if (!body || typeof body !== 'object') {
-        set.status = 400;
-        return { error: 'Invalid request body' };
-      }
-      
-      const { username, password } = body as { username: string; password: string };
-
-      if (!username || !password) {
-        set.status = 400;
-        return { error: 'Username and password are required' };
-      }
+    .post('/login', async ({ body, set }) => {
+      const { username, password } = body;
 
       // Get user from database
       const user = authService.getUserByUsername(username);
@@ -72,6 +54,11 @@ export function createAuthRoutes(authService: AuthService, logger: LoggerService
         },
         token
       };
+    }, {
+      body: t.Object({
+        username: t.String({ minLength: 1 }),
+        password: t.String({ minLength: 1 })
+      })
     })
     .post('/logout', async ({ set }) => {
       // Clear the auth cookie

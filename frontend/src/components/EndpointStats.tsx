@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Typography, Card, Box, CircularProgress, LinearProgress, Avatar, Stack } from '@mui/material';
+import { Typography, Card, Box, CircularProgress, LinearProgress, Avatar, Stack, Button } from '@mui/material';
 import type { Endpoint } from '../types';
 import { formatDateTime, formatDate } from '../utils/timezone';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
@@ -7,6 +7,7 @@ import SpeedIcon from '@mui/icons-material/Speed';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import SecurityIcon from '@mui/icons-material/Security';
 import MonitorIcon from '@mui/icons-material/Monitor';
+import CertificateModal from './CertificateModal';
 
 interface EndpointStatsProps {
   endpoint: Endpoint;
@@ -22,6 +23,7 @@ interface Stats {
 const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) => {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [certificateModalOpen, setCertificateModalOpen] = useState(false);
 
   useEffect(() => {
     if (endpoint && typeof endpoint.id === 'number') {
@@ -166,36 +168,80 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
             color={getProgressColor(endpoint.uptime_1y || 0)}
           />
 
-          {/* Certificate Expiry */}
-          <StatCard
-            icon={<SecurityIcon sx={{ fontSize: 18 }} />}
-            title="Certificate"
-            value={
-              endpoint.check_cert_expiry && endpoint.cert_expires_in !== null
-                ? `${endpoint.cert_expires_in} days`
-                : endpoint.check_cert_expiry
-                ? 'Check failed'
-                : 'Not enabled'
-            }
-            subtitle={
-              endpoint.cert_expiry_date && endpoint.cert_expires_in !== null
-                ? formatDate(endpoint.cert_expiry_date)
-                : undefined
-            }
-            color={
-              endpoint.cert_expires_in === null
-                ? 'grey'
-                : endpoint.cert_expires_in <= 30
-                ? 'error'
-                : endpoint.cert_expires_in <= 90
-                ? 'warning'
-                : 'success'
-            }
-          />
+          {/* Certificate Expiry - Clickable */}
+          <Card 
+            variant="outlined" 
+            sx={{ 
+              p: 2, 
+              height: '100%',
+              cursor: endpoint.check_cert_expiry ? 'pointer' : 'default',
+              '&:hover': endpoint.check_cert_expiry ? {
+                backgroundColor: 'action.hover'
+              } : {}
+            }}
+            onClick={() => endpoint.check_cert_expiry && setCertificateModalOpen(true)}
+          >
+            <Stack spacing={1}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Avatar sx={{ 
+                  bgcolor: `${endpoint.cert_expires_in === null
+                    ? 'grey'
+                    : endpoint.cert_expires_in <= 30
+                    ? 'error'
+                    : endpoint.cert_expires_in <= 90
+                    ? 'warning'
+                    : 'success'}.main`, 
+                  width: 32, 
+                  height: 32 
+                }}>
+                  <SecurityIcon sx={{ fontSize: 18 }} />
+                </Avatar>
+                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500 }}>
+                  Certificate
+                </Typography>
+              </Box>
+              <Typography variant="h6" component="div" sx={{ fontWeight: 'bold' }}>
+                {endpoint.check_cert_expiry && endpoint.cert_expires_in !== null
+                  ? `${endpoint.cert_expires_in} days`
+                  : endpoint.check_cert_expiry
+                  ? 'Check failed'
+                  : 'Not enabled'}
+              </Typography>
+              {endpoint.cert_expiry_date && endpoint.cert_expires_in !== null && (
+                <Typography variant="caption" color="text.secondary">
+                  {formatDate(endpoint.cert_expiry_date)}
+                </Typography>
+              )}
+              {endpoint.check_cert_expiry && (
+                <Box sx={{ mt: 1 }}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<SecurityIcon />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setCertificateModalOpen(true);
+                    }}
+                    sx={{ fontSize: '0.75rem' }}
+                  >
+                    View Details
+                  </Button>
+                </Box>
+              )}
+            </Stack>
+          </Card>
         </Box>
       ) : (
         <Typography>Could not load stats.</Typography>
       )}
+      
+      {/* Certificate Modal */}
+      <CertificateModal
+        open={certificateModalOpen}
+        onClose={() => setCertificateModalOpen(false)}
+        endpointId={endpoint.id}
+        endpointName={endpoint.name}
+      />
     </Box>
   );
 };

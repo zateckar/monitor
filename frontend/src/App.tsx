@@ -250,6 +250,8 @@ function MainApp() {
     const isNew = typeof endpoint.id === 'string' && endpoint.id.startsWith('temp-');
     
     if (isNew) {
+      // The endpoint is already optimistically added. Now, send it to the server.
+      setIsCreatingNewMonitor(true); // Pause polling during the API call
       try {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { id: _, ...endpointData } = endpoint;
@@ -258,55 +260,45 @@ function MainApp() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(endpointData),
         });
-        const newEndpoint = await res.json();
-        
-        // Update endpoints list first
-        const updatedEndpoints = endpoints.map((e) => (e.id === endpoint.id ? newEndpoint : e));
-        setEndpoints(updatedEndpoints);
-        
-        // Set the selected endpoint to the new endpoint
-        setSelectedEndpoint(newEndpoint);
-        
-        // Use longer timeout and fetch fresh data to ensure consistency
-        setTimeout(async () => {
-          setIsCreatingNewMonitor(false);
-          // Trigger a fresh data fetch to ensure everything is in sync
-          try {
-            const response = await fetch('/api/endpoints');
-            const freshData = await response.json();
-            setEndpoints(freshData);
-            
-            // Ensure the newly created endpoint remains selected
-            const updatedNewEndpoint = freshData.find((e: Endpoint) => e.id === newEndpoint.id);
-            if (updatedNewEndpoint) {
-              setSelectedEndpoint(updatedNewEndpoint);
-            }
-          } catch (error) {
-            console.error('Error refreshing data after endpoint creation:', error);
-          }
-        }, 200);
+        if (!res.ok) {
+          throw new Error(`Server responded with ${res.status}: ${await res.text()}`);
+        }
+        const newEndpointWithId = await res.json();
+
+        // Replace the temporary endpoint with the real one from the server response
+        setEndpoints(prevEndpoints =>
+          prevEndpoints.map(e => (e.id === endpoint.id ? newEndpointWithId : e))
+        );
+        setSelectedEndpoint(newEndpointWithId);
       } catch (error) {
         console.error('Error creating endpoint:', error);
-        setIsCreatingNewMonitor(false);
-        // Remove the temporary endpoint on error
-        setEndpoints(endpoints.filter(e => !(typeof e.id === 'string' && e.id.startsWith('temp-'))));
+        // On error, roll back the optimistic update by removing the temporary endpoint
+        setEndpoints(endpoints.filter(e => e.id !== endpoint.id));
         setSelectedEndpoint(null);
+      } finally {
+        setIsCreatingNewMonitor(false);
       }
     } else {
+      setIsEditingMonitor(true); // Pause polling
       try {
         const res = await fetch(`/api/endpoints/${endpoint.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(endpoint),
         });
+        if (!res.ok) {
+          throw new Error(`Server responded with ${res.status}: ${await res.text()}`);
+        }
         const updatedEndpoint = await res.json();
         setEndpoints(
           endpoints.map((e) => (e.id === updatedEndpoint.id ? updatedEndpoint : e))
         );
         setSelectedEndpoint(updatedEndpoint);
-        setIsEditingMonitor(false); // Resume auto-refresh after editing
       } catch (error) {
         console.error('Error updating endpoint:', error);
+        // Optionally, refetch data to ensure UI is in sync after a failed update
+        // fetchData();
+      } finally {
         setIsEditingMonitor(false);
       }
     }
@@ -348,18 +340,6 @@ function MainApp() {
             height: '100%',
             overflow: 'hidden'
           }}>
-            {user?.role === 'admin' && (
-              <Box sx={{ 
-                p: 2, 
-                borderBottom: 1, 
-                borderColor: 'divider',
-                flexShrink: 0
-              }}>
-                <Button variant="contained" fullWidth onClick={addEndpoint}>
-                  Add Monitor
-                </Button>
-              </Box>
-            )}
             <Box sx={{ 
               flexGrow: 1, 
               overflow: 'auto',
@@ -370,6 +350,7 @@ function MainApp() {
                 onSelect={setSelectedEndpoint}
                 selectedId={selectedEndpoint?.id}
                 onTogglePause={togglePauseEndpoint}
+                onAddEndpoint={user?.role === 'admin' ? addEndpoint : undefined}
               />
             </Box>
           </Box>

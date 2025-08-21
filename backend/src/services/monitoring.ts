@@ -7,6 +7,7 @@ import { LoggerService } from './logger';
 import { KafkaService } from './kafka';
 import { CertificateService } from './certificate';
 import { DEFAULT_CERT_CHECK_INTERVAL } from '../config/constants';
+import { extractBooleanFields } from '../utils/database';
 
 export class MonitoringService {
   // Store active timers for each endpoint
@@ -293,10 +294,14 @@ export class MonitoringService {
       const timer = setTimeout(async () => {
         try {
           const currentEndpoint = this.db.query('SELECT paused, check_cert_expiry FROM endpoints WHERE id = ?').get(endpoint.id) as any;
-          if (!currentEndpoint?.paused && currentEndpoint?.check_cert_expiry) {
+          // Convert SQLite integer values to proper booleans
+          const isPaused = Boolean(currentEndpoint?.paused);
+          const isCertCheckEnabled = Boolean(currentEndpoint?.check_cert_expiry);
+          
+          if (!isPaused && isCertCheckEnabled) {
             await boundCertCheck(endpoint);
           } else {
-            await this.logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) certificate monitoring stopped - endpoint paused or cert checking disabled`, 'CERTIFICATE');
+            await this.logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) certificate monitoring stopped - endpoint paused: ${isPaused}, cert checking enabled: ${isCertCheckEnabled}`, 'CERTIFICATE');
             this.stopCertificateMonitoring(endpoint.id);
             return;
           }
@@ -313,11 +318,15 @@ export class MonitoringService {
     (async () => {
       try {
         const currentEndpoint = this.db.query('SELECT paused, check_cert_expiry FROM endpoints WHERE id = ?').get(endpoint.id) as any;
-        if (!currentEndpoint?.paused && currentEndpoint?.check_cert_expiry) {
+        // Convert SQLite integer values to proper booleans
+        const isPaused = Boolean(currentEndpoint?.paused);
+        const isCertCheckEnabled = Boolean(currentEndpoint?.check_cert_expiry);
+        
+        if (!isPaused && isCertCheckEnabled) {
           await boundCertCheck(endpoint);
           await this.logger.info(`Started certificate monitoring for "${endpoint.name}" (ID: ${endpoint.id}) with ${(endpoint.cert_check_interval || DEFAULT_CERT_CHECK_INTERVAL) / 3600}h interval`, 'CERTIFICATE');
         } else {
-          await this.logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) certificate monitoring not started - endpoint paused or cert checking disabled`, 'CERTIFICATE');
+          await this.logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) certificate monitoring not started - endpoint paused: ${isPaused}, cert checking enabled: ${isCertCheckEnabled}`, 'CERTIFICATE');
           return;
         }
       } catch (err) {

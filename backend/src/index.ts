@@ -1,4 +1,4 @@
-import { Elysia } from 'elysia';
+import { Elysia, t } from 'elysia';
 import { cors } from '@elysiajs/cors';
 import path from 'path';
 import { createHash } from 'crypto';
@@ -22,6 +22,7 @@ import { createAuthRoutes, createAuthMiddleware } from './routes/auth';
 import { createEndpointsRoutes } from './routes/endpoints';
 import { createUserRoutes } from './routes/users';
 import { createOIDCRoutes } from './routes/oidc';
+import { createPreferencesRoutes } from './routes/preferences';
 
 async function main() {
   // Initialize database
@@ -59,38 +60,33 @@ async function main() {
     .use(createEndpointsRoutes(db, authService, logger, monitoringService, requireAuth, requireRole))
     .use(createUserRoutes(db, authService, logger, requireRole))
     .use(createOIDCRoutes(db, oidcService, authService, logger, requireRole))
+    .use(createPreferencesRoutes(db, requireRole))
     
     // Notification services API
     .get('/api/notification-services', async () => {
       return notificationService.getNotificationServices();
     })
-    .post('/api/notification-services', requireRole('admin')(async ({ request }: any) => {
-      let body: any;
-      try {
-        body = await request.json();
-      } catch (error) {
-        return new Response(JSON.stringify({ error: 'Invalid JSON in request body' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      const { name, type, config } = body as { name: string, type: string, config: object };
+    .post('/api/notification-services', requireRole('admin')(async ({ body }: any) => {
+      const { name, type, config } = body;
       return notificationService.createNotificationService(name, type, config);
-    }))
-    .put('/api/notification-services/:id', requireRole('admin')(async ({ params, request }: any) => {
+    }), {
+      body: t.Object({
+        name: t.String({ minLength: 1 }),
+        type: t.String({ minLength: 1 }),
+        config: t.Record(t.String(), t.Unknown())
+      })
+    })
+    .put('/api/notification-services/:id', requireRole('admin')(async ({ params, body }: any) => {
       const { id } = params;
-      let body: any;
-      try {
-        body = await request.json();
-      } catch (error) {
-        return new Response(JSON.stringify({ error: 'Invalid JSON in request body' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      const { name, type, config } = body as { name: string, type: string, config: object };
+      const { name, type, config } = body;
       return notificationService.updateNotificationService(parseInt(id), name, type, config);
-    }))
+    }), {
+      body: t.Object({
+        name: t.String({ minLength: 1 }),
+        type: t.String({ minLength: 1 }),
+        config: t.Record(t.String(), t.Unknown())
+      })
+    })
     .delete('/api/notification-services/:id', requireRole('admin')(async ({ params }: any) => {
       const { id } = params;
       notificationService.deleteNotificationService(parseInt(id));
@@ -100,21 +96,16 @@ async function main() {
       const { id } = params;
       return notificationService.getEndpointNotificationServices(parseInt(id));
     })
-    .post('/api/endpoints/:id/notification-services', requireRole('admin')(async ({ params, request }: any) => {
+    .post('/api/endpoints/:id/notification-services', requireRole('admin')(async ({ params, body }: any) => {
       const { id } = params;
-      let body: any;
-      try {
-        body = await request.json();
-      } catch (error) {
-        return new Response(JSON.stringify({ error: 'Invalid JSON in request body' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      const { serviceId } = body as { serviceId: number };
+      const { serviceId } = body;
       notificationService.addNotificationServiceToEndpoint(parseInt(id), serviceId);
       return { monitor_id: id, notification_service_id: serviceId };
-    }))
+    }), {
+      body: t.Object({
+        serviceId: t.Number()
+      })
+    })
     .delete('/api/endpoints/:id/notification-services/:serviceId', requireRole('admin')(async ({ params }: any) => {
       const { id, serviceId } = params;
       notificationService.removeNotificationServiceFromEndpoint(parseInt(id), parseInt(serviceId));
@@ -137,40 +128,22 @@ async function main() {
     .get('/api/logs/level', requireRole('admin')(async () => {
       return { level: logger.getLogLevel() };
     }))
-    .put('/api/logs/level', requireRole('admin')(async ({ request }: any) => {
-      let body: any;
-      try {
-        body = await request.json();
-      } catch (error) {
-        return new Response(JSON.stringify({ error: 'Invalid JSON in request body' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      const { level } = body as { level: string };
+    .put('/api/logs/level', requireRole('admin')(async ({ body }: any) => {
+      const { level } = body;
       console.log('PUT /api/logs/level called with level:', level);
       logger.setLogLevel(level);
       console.log('After setLogLevel, current level is:', logger.getLogLevel());
       return { level };
-    }))
+    }), {
+      body: t.Object({
+        level: t.String({ minLength: 1 })
+      })
+    })
     
     // Certificate testing API for debugging
-    .post('/api/debug/certificate', requireRole('admin')(async ({ request, set }: any) => {
+    .post('/api/debug/certificate', requireRole('admin')(async ({ body, set }: any) => {
       try {
-        let body: any;
-        try {
-          body = await request.json();
-        } catch (error) {
-          set.status = 400;
-          return { error: 'Invalid JSON in request body' };
-        }
-        
-        const { url } = body as { url: string };
-        
-        if (!url) {
-          set.status = 400;
-          return { error: 'URL is required' };
-        }
+        const { url } = body;
         
         await logger.info(`Manual certificate check requested for: ${url}`, 'CERTIFICATE_DEBUG');
         
@@ -209,7 +182,11 @@ async function main() {
           }
         };
       }
-    }))
+    }), {
+      body: t.Object({
+        url: t.String({ minLength: 1 })
+      })
+    })
     
     // Database management API
     .get('/api/database/stats', requireRole('admin')(async () => {

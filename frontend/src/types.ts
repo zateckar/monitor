@@ -125,3 +125,22 @@ export interface OIDCProvider {
   is_active: boolean;
   created_at: string;
 }
+
+export interface CertificateInfo {
+  subject: string;
+  issuer: string;
+  validFrom: string;
+  validTo: string;
+  daysRemaining: number;
+  serialNumber: string;
+  fingerprint: string;
+  subjectAltNames?: string[];
+  keyUsage?: string[];
+  extKeyUsage?: string[];
+}
+
+export interface CertificateChain {
+  certificates: CertificateInfo[];
+  isValid: boolean;
+  errors?: string[];
+}

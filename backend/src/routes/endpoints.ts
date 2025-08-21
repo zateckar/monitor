@@ -1,9 +1,10 @@
-import { Elysia } from 'elysia';
+import { Elysia, t } from 'elysia';
 import { Database } from 'bun:sqlite';
 import type { Endpoint } from '../types';
 import { AuthService } from '../services/auth';
 import { LoggerService } from '../services/logger';
 import { MonitoringService } from '../services/monitoring';
+import { CertificateService } from '../services/certificate';
 import { validateEndpoint } from '../utils/validation';
 import { calculateGapAwareUptime } from '../utils/uptime';
 import { formatDuration } from '../utils/formatting';
@@ -16,6 +17,8 @@ export function createEndpointsRoutes(
   requireAuth: (handler: any) => any,
   requireRole: (role: 'admin' | 'user') => (handler: any) => any
 ) {
+  // Get certificate service from monitoring service (it already has it)
+  const certificateService = (monitoringService as any).certificateService;
   return new Elysia({ prefix: '/api' })
     .get('/endpoints', async () => {
       const endpoints: Endpoint[] = db.query('SELECT * FROM endpoints').all() as Endpoint[];
@@ -35,10 +38,13 @@ export function createEndpointsRoutes(
             ok_http_statuses: endpoint.ok_http_statuses ? JSON.parse(endpoint.ok_http_statuses) : [],
             http_headers: endpoint.http_headers ? JSON.parse(endpoint.http_headers) : null,
             kafka_config: endpoint.kafka_config ? JSON.parse(endpoint.kafka_config) : null,
+            // Properly convert SQLite integer values to booleans
             paused: Boolean(endpoint.paused),
             upside_down_mode: Boolean(endpoint.upside_down_mode),
             check_cert_expiry: Boolean(endpoint.check_cert_expiry),
             client_cert_enabled: Boolean(endpoint.client_cert_enabled),
+            kafka_consumer_read_single: Boolean(endpoint.kafka_consumer_read_single),
+            kafka_consumer_auto_commit: Boolean(endpoint.kafka_consumer_auto_commit),
             current_response: lastResponse?.response_time || 0,
             avg_response_24h: stats24h?.avg_response || 0,
             uptime_24h: stats24h?.uptime || 0,
@@ -232,6 +238,31 @@ export function createEndpointsRoutes(
       // Return in chronological order (oldest first) for proper display
       return heartbeats.reverse();
     })
+    .get('/endpoints/:id/certificate-chain', async ({ params, set }) => {
+      const { id } = params;
+      
+      // Get endpoint URL
+      const endpoint = db.query('SELECT url, check_cert_expiry FROM endpoints WHERE id = ?').get(id) as any;
+      if (!endpoint) {
+        set.status = 404;
+        return { error: 'Endpoint not found' };
+      }
+
+      if (!endpoint.check_cert_expiry) {
+        set.status = 400;
+        return { error: 'Certificate checking is not enabled for this endpoint' };
+      }
+
+      // Get certificate chain information
+      const result = await certificateService.getCertificateChain(endpoint.url);
+      
+      if (!result.success) {
+        set.status = 500;
+        return { error: result.error.error, details: result.error.details };
+      }
+
+      return result.result;
+    })
     .delete('/endpoints/:id/heartbeats', async ({ params }) => {
       const { id } = params;
       
@@ -260,27 +291,9 @@ export function createEndpointsRoutes(
         message: `Deleted outage history (${result.changes} records)` 
       };
     })
-    .post('/endpoints', requireRole('admin')(async ({ request, set }: any) => {
+    .post('/endpoints', requireRole('admin')(async ({ body, set }: any) => {
       try {
         logger.debug(`Received POST /api/endpoints`, 'ENDPOINT');
-        logger.debug(`Request Content-Type: ${request.headers.get('content-type')}`, 'ENDPOINT');
-        
-        // Parse request body manually
-        let body: any;
-        try {
-          body = await request.json();
-        } catch (error) {
-          set.status = 400;
-          logger.error(`Failed to parse JSON body: ${error}`, 'ENDPOINT');
-          return { error: 'Invalid JSON in request body' };
-        }
-        
-        // Ensure body exists and is an object
-        if (!body || typeof body !== 'object') {
-          set.status = 400;
-          logger.error(`Invalid request body - body: ${body}, type: ${typeof body}`, 'ENDPOINT');
-          return { error: 'Invalid request body' };
-        }
 
         // Log potential security issues for monitoring
         logger.debug(`Body received for validation: ${JSON.stringify(body)}`, 'SECURITY');
@@ -351,23 +364,22 @@ export function createEndpointsRoutes(
         set.status = 500;
         return { error: 'Failed to create endpoint: ' + (error instanceof Error ? error.message : 'Unknown error') };
       }
-    }))
-    .put('/endpoints/:id', requireRole('admin')(async ({ params, request, set }: any) => {
+    }), {
+      body: t.Object({
+        url: t.String({ minLength: 1 }),
+        name: t.Optional(t.String()),
+        type: t.Union([
+          t.Literal('http'),
+          t.Literal('tcp'),
+          t.Literal('kafka')
+        ])
+      }, { additionalProperties: true })
+    })
+    .put('/endpoints/:id', requireRole('admin')(async ({ params, body, set }: any) => {
       try {
         const { id } = params;
         
         logger.debug(`Received PUT /api/endpoints/${id}`, 'ENDPOINT');
-        logger.debug(`Request Content-Type: ${request.headers.get('content-type')}`, 'ENDPOINT');
-        
-        // Parse request body manually
-        let body: any;
-        try {
-          body = await request.json();
-        } catch (error) {
-          set.status = 400;
-          logger.error(`Failed to parse JSON body: ${error}`, 'ENDPOINT');
-          return { error: 'Invalid JSON in request body' };
-        }
         
         // Check if endpoint exists
         const existingEndpoint = db.query('SELECT * FROM endpoints WHERE id = ?').get(id) as any;
@@ -376,20 +388,11 @@ export function createEndpointsRoutes(
           return { error: 'Endpoint not found' };
         }
 
-        // Ensure body exists and is an object
-        if (!body || typeof body !== 'object') {
-          set.status = 400;
-          logger.error(`Invalid request body - body: ${body}, type: ${typeof body}`, 'ENDPOINT');
-          return { error: 'Invalid request body' };
-        }
-
-        const bodyToValidate = body;
-
         // Log potential security issues for monitoring
-        logger.debug(`Body received for validation: ${JSON.stringify(bodyToValidate)}`, 'SECURITY');
+        logger.debug(`Body received for validation: ${JSON.stringify(body)}`, 'SECURITY');
 
         // Comprehensive validation using our security-focused validation system
-        const validation = validateEndpoint(bodyToValidate);
+        const validation = validateEndpoint(body);
         if (!validation.isValid) {
           set.status = 400;
           logger.warn(`Endpoint validation failed for update: ${validation.error}`, 'SECURITY');
@@ -450,7 +453,17 @@ export function createEndpointsRoutes(
         set.status = 500;
         return { error: 'Failed to update endpoint: ' + (error instanceof Error ? error.message : 'Unknown error') };
       }
-    }))
+    }), {
+      body: t.Object({
+        url: t.String({ minLength: 1 }),
+        name: t.Optional(t.String()),
+        type: t.Union([
+          t.Literal('http'),
+          t.Literal('tcp'),
+          t.Literal('kafka')
+        ])
+      }, { additionalProperties: true })
+    })
     .delete('/endpoints/:id', requireRole('admin')(async ({ params }: any) => {
       const { id } = params;
       

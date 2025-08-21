@@ -111,9 +111,43 @@ const EditEndpointForm: React.FC<EditEndpointFormProps> = ({ endpoint, onUpdate,
       setHeartbeatInterval(endpoint.heartbeat_interval);
       setRetries(endpoint.retries);
       setHttpMethod(endpoint.http_method || 'GET');
-      setHttpHeaders(endpoint.http_headers || '');
+
+      // Parse HTTP headers from JSON string if needed
+      let parsedHeaders = '';
+      if (endpoint.http_headers) {
+        if (typeof endpoint.http_headers === 'string') {
+          try {
+            const parsed = JSON.parse(endpoint.http_headers);
+            // Convert object back to formatted JSON string for display
+            parsedHeaders = JSON.stringify(parsed, null, 2);
+          } catch (e) {
+            // If parsing fails, use as-is (might already be a formatted string)
+            parsedHeaders = endpoint.http_headers;
+          }
+        } else if (typeof endpoint.http_headers === 'object') {
+          parsedHeaders = JSON.stringify(endpoint.http_headers, null, 2);
+        }
+      }
+      setHttpHeaders(parsedHeaders);
+
       setHttpBody(endpoint.http_body || '');
-      setOkHttpStatuses(endpoint.ok_http_statuses ? endpoint.ok_http_statuses.join(',') : '');
+
+      // Parse OK HTTP statuses
+      let parsedStatuses = '';
+      if (endpoint.ok_http_statuses) {
+        if (Array.isArray(endpoint.ok_http_statuses)) {
+          parsedStatuses = endpoint.ok_http_statuses.join(',');
+        } else if (typeof endpoint.ok_http_statuses === 'string') {
+          try {
+            const parsed = JSON.parse(endpoint.ok_http_statuses);
+            parsedStatuses = Array.isArray(parsed) ? parsed.join(',') : endpoint.ok_http_statuses;
+          } catch (e) {
+            parsedStatuses = endpoint.ok_http_statuses;
+          }
+        }
+      }
+      setOkHttpStatuses(parsedStatuses);
+
       setCheckCertExpiry(endpoint.check_cert_expiry || false);
       setCertExpiryThreshold(endpoint.cert_expiry_threshold || 30);
       setCertCheckInterval(endpoint.cert_check_interval ? endpoint.cert_check_interval / 3600 : 6); // Convert seconds to hours
@@ -122,8 +156,23 @@ const EditEndpointForm: React.FC<EditEndpointFormProps> = ({ endpoint, onUpdate,
       setTcpPort(endpoint.tcp_port);
       setKafkaTopic(endpoint.kafka_topic);
       setKafkaMessage(endpoint.kafka_message);
-      setKafkaConfig(endpoint.kafka_config);
-      
+
+      // Parse Kafka config from JSON string if needed
+      let parsedKafkaConfig = '';
+      if (endpoint.kafka_config) {
+        if (typeof endpoint.kafka_config === 'string') {
+          try {
+            const parsed = JSON.parse(endpoint.kafka_config);
+            parsedKafkaConfig = JSON.stringify(parsed, null, 2);
+          } catch (e) {
+            parsedKafkaConfig = endpoint.kafka_config;
+          }
+        } else if (typeof endpoint.kafka_config === 'object') {
+          parsedKafkaConfig = JSON.stringify(endpoint.kafka_config, null, 2);
+        }
+      }
+      setKafkaConfig(parsedKafkaConfig);
+
       // mTLS values
       setClientCertEnabled(endpoint.client_cert_enabled || false);
       setClientCertPublicKey(endpoint.client_cert_public_key || '');

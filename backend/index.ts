@@ -38,6 +38,7 @@ import { createNotificationRoutes } from './src/routes/notifications';
 import { createStatusPageRoutes } from './src/routes/status-pages';
 import { createSystemRoutes } from './src/routes/system';
 import { createStaticRoutes } from './src/routes/static';
+import { createPreferencesRoutes } from './src/routes/preferences';
 
 // Import utilities
 import { calculateGapAwareUptime } from './src/utils/uptime';
@@ -116,6 +117,7 @@ async function main() {
   const notificationRoutes = createNotificationRoutes(db, logger);
   const statusPageRoutes = createStatusPageRoutes(statusPageService, logger, requireRole);
   const systemRoutes = createSystemRoutes(db, databaseService, logger);
+  const preferencesRoutes = createPreferencesRoutes(db, requireRole);
   const staticRoutes = createStaticRoutes(staticFileService);
 
   // Create main Elysia app
@@ -137,6 +139,7 @@ async function main() {
     .use(notificationRoutes)
     .use(statusPageRoutes)
     .use(systemRoutes)
+    .use(preferencesRoutes)
     // Static file routes must be last (catch-all)
     .use(staticRoutes)
     .listen(3001);
