@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   List, 
   Typography, 
@@ -50,6 +50,8 @@ const EndpointList: React.FC<EndpointListProps> = ({
 }) => {
   const [sortMode, setSortMode] = useState<SortMode>('alphabetical');
   const [customOrder, setCustomOrder] = useState<(string | number)[]>([]);
+  const isInitialLoadRef = useRef<boolean>(true);
+  const hasInitializedStateRef = useRef<boolean>(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -61,6 +63,40 @@ const EndpointList: React.FC<EndpointListProps> = ({
       coordinateGetter: sortableKeyboardCoordinates,
     })
   );
+
+  // Save sort mode to backend
+  const saveSortModePreference = async (mode: SortMode) => {
+    try {
+      await fetch('/api/preferences/endpoint_sort_mode', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ value: mode }),
+      });
+    } catch (error) {
+      console.error('Failed to save sort mode preference:', error);
+      // Fallback to localStorage
+      localStorage.setItem('endpoint_sort_mode', mode);
+    }
+  };
+
+  // Save custom order to backend
+  const saveCustomOrderPreference = async (order: (string | number)[]) => {
+    try {
+      await fetch('/api/preferences/endpoint_custom_order', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ value: order }),
+      });
+    } catch (error) {
+      console.error('Failed to save custom order preference:', error);
+      // Fallback to localStorage
+      localStorage.setItem('endpoint_custom_order', JSON.stringify(order));
+    }
+  };
 
   // Load preferences from backend on mount
   useEffect(() => {
@@ -96,64 +132,15 @@ const EndpointList: React.FC<EndpointListProps> = ({
           setSortMode(savedSortMode);
         }
       }
+      
+      // Mark initial load as complete
+      isInitialLoadRef.current = false;
+      hasInitializedStateRef.current = true;
     };
 
     loadPreferences();
   }, []);
 
-  // Save sort mode to backend
-  useEffect(() => {
-    const savePreference = async () => {
-      try {
-        await fetch('/api/preferences/endpoint_sort_mode', {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ value: sortMode }),
-        });
-      } catch (error) {
-        console.error('Failed to save sort mode preference:', error);
-        // Fallback to localStorage
-        localStorage.setItem('endpoint_sort_mode', sortMode);
-      }
-    };
-
-    savePreference();
-  }, [sortMode]);
-
-  // Save custom order to backend
-  useEffect(() => {
-    if (customOrder.length > 0) {
-      const savePreference = async () => {
-        try {
-          await fetch('/api/preferences/endpoint_custom_order', {
-            method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ value: customOrder }),
-          });
-        } catch (error) {
-          console.error('Failed to save custom order preference:', error);
-          // Fallback to localStorage
-          localStorage.setItem('endpoint_custom_order', JSON.stringify(customOrder));
-        }
-      };
-
-      savePreference();
-    }
-  }, [customOrder]);
-
-  // Initialize custom order when endpoints change and no custom order exists
-  useEffect(() => {
-    if (endpoints.length > 0 && customOrder.length === 0) {
-      const alphabeticalOrder = [...endpoints]
-        .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
-        .map(endpoint => endpoint.id);
-      setCustomOrder(alphabeticalOrder);
-    }
-  }, [endpoints, customOrder.length]);
 
   // Sort endpoints based on current sort mode
   const sortedEndpoints = useMemo(() => {
@@ -206,9 +193,17 @@ const EndpointList: React.FC<EndpointListProps> = ({
         const newCustomOrder = newOrder.map(ep => ep.id);
         setCustomOrder(newCustomOrder);
         
+        // Save custom order since this is a user action
+        if (hasInitializedStateRef.current) {
+          saveCustomOrderPreference(newCustomOrder);
+        }
+        
         // Switch to custom mode if not already
         if (sortMode !== 'custom') {
           setSortMode('custom');
+          if (hasInitializedStateRef.current) {
+            saveSortModePreference('custom');
+          }
         }
       }
     }
@@ -217,12 +212,22 @@ const EndpointList: React.FC<EndpointListProps> = ({
   const handleSortModeChange = (mode: SortMode) => {
     setSortMode(mode);
     
+    // Save sort mode since this is a user action
+    if (hasInitializedStateRef.current) {
+      saveSortModePreference(mode);
+    }
+    
     if (mode === 'alphabetical') {
       // Update custom order to match alphabetical order for future use
       const alphabeticalOrder = [...endpoints]
         .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
         .map(endpoint => endpoint.id);
       setCustomOrder(alphabeticalOrder);
+      
+      // Save the alphabetical order
+      if (hasInitializedStateRef.current) {
+        saveCustomOrderPreference(alphabeticalOrder);
+      }
     }
   };
 
