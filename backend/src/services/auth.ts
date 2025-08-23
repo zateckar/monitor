@@ -1,5 +1,4 @@
 import jwt from 'jsonwebtoken';
-import { parse as parseCookie } from 'cookie';
 import { Database } from 'bun:sqlite';
 import type { User } from '../types';
 import { JWT_SECRET, JWT_EXPIRES_IN } from '../config/constants';
@@ -45,7 +44,14 @@ export class AuthService {
     if (!token) {
       const cookieHeader = request.headers.get('cookie');
       if (cookieHeader) {
-        const cookies = parseCookie(cookieHeader);
+        // Simple cookie parsing for auth_token
+        const cookies: Record<string, string> = {};
+        cookieHeader.split(';').forEach(cookie => {
+          const [name, ...rest] = cookie.trim().split('=');
+          if (name && rest.length > 0) {
+            cookies[name] = rest.join('=');
+          }
+        });
         token = cookies.auth_token || null;
       }
     }

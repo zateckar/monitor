@@ -351,12 +351,38 @@ export function createEndpointsRoutes(
         if (newEndpoint) {
           logger.info(`Starting monitoring for new endpoint "${newEndpoint.name}" (ID: ${newEndpoint.id})`, 'MONITORING');
           monitoringService.startEndpointMonitoring(newEndpoint);
+
+          // Return the complete endpoint object with proper formatting (same as GET endpoint)
+          const fullEndpoint = {
+            ...newEndpoint,
+            ok_http_statuses: newEndpoint.ok_http_statuses ? JSON.parse(newEndpoint.ok_http_statuses) : [],
+            http_headers: newEndpoint.http_headers ? JSON.parse(newEndpoint.http_headers) : null,
+            kafka_config: newEndpoint.kafka_config ? JSON.parse(newEndpoint.kafka_config) : null,
+            // Properly convert SQLite integer values to booleans
+            paused: Boolean(newEndpoint.paused),
+            upside_down_mode: Boolean(newEndpoint.upside_down_mode),
+            check_cert_expiry: Boolean(newEndpoint.check_cert_expiry),
+            client_cert_enabled: Boolean(newEndpoint.client_cert_enabled),
+            kafka_consumer_read_single: Boolean(newEndpoint.kafka_consumer_read_single),
+            kafka_consumer_auto_commit: Boolean(newEndpoint.kafka_consumer_auto_commit),
+            current_response: 0, // No response time yet
+            avg_response_24h: 0,
+            uptime_24h: 0,
+            uptime_30d: 0,
+            uptime_1y: 0,
+            cert_expires_in: newEndpoint.cert_expires_in,
+            cert_expiry_date: newEndpoint.cert_expiry_date,
+          };
+          
+          return fullEndpoint;
         }
 
+        // Fallback if we can't retrieve the new endpoint
         return { 
           id: result.lastInsertRowid, 
           url: sanitizedData.url, 
           name: sanitizedData.name || sanitizedData.url, 
+          type: sanitizedData.type,
           status: 'pending' 
         };
       } catch (error) {

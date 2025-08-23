@@ -87,7 +87,7 @@ const EndpointListItem: React.FC<EndpointListItemProps> = ({
                   {endpoint.name}
                 </Typography>
                 <Chip
-                  label={endpoint.type.toUpperCase()}
+                  label={endpoint.type?.toUpperCase() || 'UNKNOWN'}
                   size="small"
                   variant="outlined"
                   sx={{ 

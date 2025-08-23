@@ -1,10 +1,41 @@
 import { Elysia } from 'elysia';
-import { serialize as serializeCookie, parse as parseCookie } from 'cookie';
 import * as openidClient from 'openid-client';
 import { Database } from 'bun:sqlite';
 import { OIDCService } from '../services/oidc';
 import { AuthService } from '../services/auth';
 import { LoggerService } from '../services/logger';
+
+// Cookie helper functions
+const parseCookie = (cookieString: string): Record<string, string> => {
+  const cookies: Record<string, string> = {};
+  if (!cookieString) return cookies;
+  
+  cookieString.split(';').forEach(cookie => {
+    const [name, ...rest] = cookie.trim().split('=');
+    if (name && rest.length > 0) {
+      cookies[name] = rest.join('=');
+    }
+  });
+  return cookies;
+};
+
+const serializeCookie = (name: string, value: string, options: {
+  httpOnly?: boolean;
+  secure?: boolean;
+  sameSite?: 'strict' | 'lax' | 'none';
+  maxAge?: number;
+  path?: string;
+} = {}): string => {
+  let cookie = `${name}=${value}`;
+  
+  if (options.httpOnly) cookie += '; HttpOnly';
+  if (options.secure) cookie += '; Secure';
+  if (options.sameSite) cookie += `; SameSite=${options.sameSite}`;
+  if (options.maxAge !== undefined) cookie += `; Max-Age=${options.maxAge}`;
+  if (options.path) cookie += `; Path=${options.path}`;
+  
+  return cookie;
+};
 
 // Environment-aware configuration
 const isProduction = process.env.NODE_ENV === 'production';

@@ -1,13 +1,21 @@
 import ping from 'ping';
 import net from 'net';
-import https from 'https';
 import { Database } from 'bun:sqlite';
 import type { Endpoint } from '../types';
 import { LoggerService } from './logger';
 import { KafkaService } from './kafka';
 import { CertificateService } from './certificate';
 import { DEFAULT_CERT_CHECK_INTERVAL } from '../config/constants';
-import { extractBooleanFields } from '../utils/database';
+
+interface BunFetchOptions extends RequestInit {
+  tls?: {
+    cert?: string | Buffer;
+    key?: string | Buffer;
+    ca?: string | Buffer;
+    rejectUnauthorized?: boolean;
+    serverName?: string;
+  };
+}
 
 export class MonitoringService {
   // Store active timers for each endpoint
@@ -23,31 +31,191 @@ export class MonitoringService {
     private sendNotification: (endpoint: Endpoint, status: string) => Promise<void>
   ) {}
 
-  // Helper function to create HTTP agent with mTLS support
-  private createHttpAgent(endpoint: Endpoint): https.Agent | undefined {
-    if (!endpoint.client_cert_enabled || !endpoint.client_cert_private_key || !endpoint.client_cert_public_key) {
-      return undefined;
+  // Create fetch options with TLS configuration for mTLS
+  private createFetchOptions(endpoint: Endpoint): BunFetchOptions {
+    const options: BunFetchOptions = {
+      method: endpoint.http_method || 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; Monitor/1.0)',
+        ...this.parseHeaders(endpoint.http_headers)
+      },
+      signal: AbortSignal.timeout(30000), // 30 second timeout
+    };
+
+    // Add body for non-GET/HEAD requests
+    if (endpoint.http_body && options.method !== 'GET' && options.method !== 'HEAD') {
+      options.body = endpoint.http_body;
     }
 
-    try {
-      const options: any = {
+    // Configure mTLS if enabled
+    if (endpoint.client_cert_enabled && endpoint.client_cert_private_key && endpoint.client_cert_public_key) {
+      options.tls = {
         cert: endpoint.client_cert_public_key,
         key: endpoint.client_cert_private_key,
-        rejectUnauthorized: true, // Verify server certificate
+        rejectUnauthorized: false, // Start with permissive settings
       };
 
-      // Add CA certificate if provided
+      // Add CA certificate if provided and enable verification
       if (endpoint.client_cert_ca) {
-        options.ca = endpoint.client_cert_ca;
+        options.tls.ca = endpoint.client_cert_ca;
+        options.tls.rejectUnauthorized = true;
       }
 
-      return new https.Agent(options);
+      // Set server name for SNI
+      try {
+        const url = new URL(endpoint.url);
+        options.tls.serverName = url.hostname;
+      } catch (error) {
+        this.logger.warn(`Invalid URL for SNI configuration: ${endpoint.url}`, 'MONITORING');
+      }
+    }
+
+    return options;
+  }
+
+  // Parse HTTP headers from JSON string
+  private parseHeaders(headersJson?: string | null): Record<string, string> {
+    if (!headersJson) return {};
+    
+    try {
+      return JSON.parse(headersJson);
     } catch (error) {
-      console.error(`Error creating mTLS agent for endpoint ${endpoint.id}: ${error}`);
-      return undefined;
+      this.logger.warn(`Invalid HTTP headers JSON: ${headersJson}`, 'MONITORING');
+      return {};
     }
   }
 
+  // Parse OK HTTP statuses from JSON string
+  private parseOkStatuses(statusesJson?: string | null): string[] {
+    if (!statusesJson) return [];
+    
+    try {
+      return JSON.parse(statusesJson);
+    } catch (error) {
+      this.logger.warn(`Invalid OK HTTP statuses JSON: ${statusesJson}`, 'MONITORING');
+      return [];
+    }
+  }
+
+  // Check if response status is considered OK
+  private isStatusOk(status: number, endpoint: Endpoint): boolean {
+    const okStatuses = this.parseOkStatuses(endpoint.ok_http_statuses);
+    
+    if (okStatuses.length > 0) {
+      return okStatuses.includes(status.toString());
+    }
+    
+    // Default behavior: 2xx status codes are OK
+    return status >= 200 && status < 300;
+  }
+
+  // Check if response contains required keyword
+  private async checkKeyword(response: Response, keyword?: string | null): Promise<boolean> {
+    if (!keyword?.trim()) return true;
+    
+    try {
+      const text = await response.text();
+      return text.includes(keyword);
+    } catch (error) {
+      this.logger.warn(`Error reading response text for keyword search: ${error}`, 'MONITORING');
+      return false;
+    }
+  }
+
+  // Perform HTTP check using Bun's fetch
+  private async checkHttp(endpoint: Endpoint): Promise<{ isOk: boolean; responseTime: number }> {
+    const startTime = Date.now();
+    
+    try {
+      const options = this.createFetchOptions(endpoint);
+
+      const response = await fetch(endpoint.url, options);
+      const responseTime = Date.now() - startTime;
+
+      // Check status code
+      const statusOk = this.isStatusOk(response.status, endpoint);
+      
+      if (!statusOk) {
+        await this.logger.debug(`HTTP status check failed for ${endpoint.url}: ${response.status}`, 'MONITORING');
+        return { isOk: false, responseTime };
+      }
+
+      // Check keyword if specified
+      const keywordOk = await this.checkKeyword(response, endpoint.keyword_search);
+      
+      if (!keywordOk) {
+        await this.logger.debug(`Keyword search failed for ${endpoint.url}: "${endpoint.keyword_search}" not found`, 'MONITORING');
+        return { isOk: false, responseTime };
+      }
+
+      return { isOk: true, responseTime };
+
+    } catch (error) {
+      const responseTime = Date.now() - startTime;
+      await this.logger.debug(`HTTP request failed for ${endpoint.url}: ${error}`, 'MONITORING');
+      return { isOk: false, responseTime };
+    }
+  }
+
+  // Perform ping check
+  private async checkPing(endpoint: Endpoint): Promise<{ isOk: boolean; responseTime: number }> {
+    try {
+      const result = await ping.promise.probe(endpoint.url, { timeout: 10 });
+      const responseTime = result.time === 'unknown' ? 0 : result.time;
+      return { isOk: result.alive, responseTime };
+    } catch (error) {
+      await this.logger.debug(`Ping failed for ${endpoint.url}: ${error}`, 'MONITORING');
+      return { isOk: false, responseTime: 0 };
+    }
+  }
+
+  // Perform TCP port check
+  private async checkTcp(endpoint: Endpoint): Promise<{ isOk: boolean; responseTime: number }> {
+    const startTime = Date.now();
+    
+    return new Promise((resolve) => {
+      const socket = new net.Socket();
+      socket.setTimeout(10000);
+      
+      socket.on('connect', () => {
+        const responseTime = Date.now() - startTime;
+        socket.destroy();
+        resolve({ isOk: true, responseTime });
+      });
+      
+      socket.on('timeout', () => {
+        socket.destroy();
+        resolve({ isOk: false, responseTime: Date.now() - startTime });
+      });
+      
+      socket.on('error', () => {
+        socket.destroy();
+        resolve({ isOk: false, responseTime: Date.now() - startTime });
+      });
+      
+      socket.connect(endpoint.tcp_port!, endpoint.url);
+    });
+  }
+
+  // Perform Kafka check
+  private async checkKafka(endpoint: Endpoint): Promise<{ isOk: boolean; responseTime: number }> {
+    await this.logger.debug(`[Kafka-${endpoint.name}] Performing health check using persistent connection`, 'KAFKA');
+    
+    try {
+      const healthResult = await this.kafkaService.checkKafkaHealth(endpoint);
+      
+      if (healthResult.isOk) {
+        await this.logger.debug(`[Kafka-${endpoint.name}] Health check passed in ${healthResult.responseTime}ms`, 'KAFKA');
+      } else {
+        await this.logger.warn(`[Kafka-${endpoint.name}] Health check failed in ${healthResult.responseTime}ms`, 'KAFKA');
+      }
+      
+      return healthResult;
+    } catch (error) {
+      await this.logger.error(`[Kafka-${endpoint.name}] Health check error: ${error}`, 'KAFKA');
+      throw error;
+    }
+  }
 
   // Function to check a single endpoint
   async checkSingleEndpoint(endpoint: Endpoint): Promise<void> {
@@ -62,131 +230,38 @@ export class MonitoringService {
     let responseTime = 0;
 
     try {
+      // Perform the appropriate check based on endpoint type
       switch (endpoint.type) {
         case 'http':
-          const headers = endpoint.http_headers ? JSON.parse(endpoint.http_headers) : undefined;
-          const body = endpoint.http_body;
-          const method = endpoint.http_method || 'GET';
-
-          // Create mTLS agent if client certificates are enabled
-          const agent = this.createHttpAgent(endpoint);
-          
-          let response: Response;
-          if (agent && endpoint.url.startsWith('https://')) {
-            // Use Node.js HTTPS with mTLS for HTTPS URLs when mTLS is enabled
-            const url = new URL(endpoint.url);
-            const requestOptions = {
-              hostname: url.hostname,
-              port: url.port || 443,
-              path: url.pathname + url.search,
-              method,
-              headers: headers as any,
-              agent,
-            };
-
-            response = await new Promise((resolve, reject) => {
-              const req = https.request(requestOptions, (res) => {
-                let data = '';
-                res.on('data', (chunk) => {
-                  data += chunk;
-                });
-                res.on('end', () => {
-                  resolve({
-                    ok: res.statusCode ? res.statusCode >= 200 && res.statusCode < 300 : false,
-                    status: res.statusCode || 0,
-                    text: async () => data,
-                  } as Response);
-                });
-              });
-
-              req.on('error', reject);
-
-              if (body && (method !== 'GET' && method !== 'HEAD')) {
-                req.write(body);
-              }
-              
-              req.end();
-            });
-          } else {
-            // Use standard fetch for non-HTTPS URLs or when mTLS is disabled
-            response = await fetch(endpoint.url, {
-              method,
-              headers,
-              body: method !== 'GET' && method !== 'HEAD' ? body : undefined,
-            });
-          }
-
-          responseTime = Date.now() - startTime;
-          const ok_http_statuses = endpoint.ok_http_statuses ? JSON.parse(endpoint.ok_http_statuses) : [];
-          isOk = response.ok;
-          if (ok_http_statuses.length > 0) {
-            isOk = ok_http_statuses.includes(response.status.toString());
-          }
-
-          // Check for keyword in response if specified
-          if (isOk && endpoint.keyword_search && endpoint.keyword_search.trim()) {
-            try {
-              const responseText = await response.text();
-              const containsKeyword = responseText.includes(endpoint.keyword_search);
-              if (!containsKeyword) {
-                isOk = false;
-              }
-            } catch (err) {
-              console.error(`Error reading response text for keyword search on ${endpoint.url}:`, err);
-              isOk = false;
-            }
-          }
+          const httpResult = await this.checkHttp(endpoint);
+          isOk = httpResult.isOk;
+          responseTime = httpResult.responseTime;
           break;
 
         case 'ping':
-          const pingRes = await ping.promise.probe(endpoint.url, { timeout: 10 });
-          responseTime = pingRes.time === 'unknown' ? 0 : pingRes.time;
-          isOk = pingRes.alive;
+          const pingResult = await this.checkPing(endpoint);
+          isOk = pingResult.isOk;
+          responseTime = pingResult.responseTime;
           break;
 
         case 'tcp':
-          isOk = await new Promise((resolve) => {
-            const socket = new net.Socket();
-            socket.setTimeout(10000);
-            socket.on('connect', () => {
-              responseTime = Date.now() - startTime;
-              socket.destroy();
-              resolve(true);
-            });
-            socket.on('timeout', () => {
-              socket.destroy();
-              resolve(false);
-            });
-            socket.on('error', () => {
-              socket.destroy();
-              resolve(false);
-            });
-            socket.connect(endpoint.tcp_port!, endpoint.url);
-          });
+          const tcpResult = await this.checkTcp(endpoint);
+          isOk = tcpResult.isOk;
+          responseTime = tcpResult.responseTime;
           break;
 
         case 'kafka_producer':
         case 'kafka_consumer':
-          await this.logger.debug(`[Kafka-${endpoint.name}] Performing health check using persistent connection`, 'KAFKA');
-          
-          try {
-            const healthResult = await this.kafkaService.checkKafkaHealth(endpoint);
-            isOk = healthResult.isOk;
-            responseTime = healthResult.responseTime;
-            
-            if (isOk) {
-              await this.logger.debug(`[Kafka-${endpoint.name}] Health check passed in ${responseTime}ms`, 'KAFKA');
-            } else {
-              await this.logger.warn(`[Kafka-${endpoint.name}] Health check failed in ${responseTime}ms`, 'KAFKA');
-            }
-          } catch (error) {
-            responseTime = Date.now() - startTime;
-            await this.logger.error(`[Kafka-${endpoint.name}] Health check error: ${error}`, 'KAFKA');
-            throw error;
-          }
+          const kafkaResult = await this.checkKafka(endpoint);
+          isOk = kafkaResult.isOk;
+          responseTime = kafkaResult.responseTime;
           break;
+
+        default:
+          throw new Error(`Unsupported endpoint type: ${endpoint.type}`);
       }
 
+      // Apply upside down mode if enabled
       if (endpoint.upside_down_mode) {
         isOk = !isOk;
       }
@@ -198,6 +273,7 @@ export class MonitoringService {
         } else {
           await this.logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) check successful - response time: ${responseTime}ms`, 'MONITORING');
         }
+        
         this.db.run('UPDATE endpoints SET status = ?, failed_attempts = 0, last_checked = CURRENT_TIMESTAMP WHERE id = ?', ['UP', endpoint.id]);
         this.db.run('INSERT INTO response_times (endpoint_id, response_time, status) VALUES (?, ?, ?)', [endpoint.id, responseTime, 'UP']);
       } else {

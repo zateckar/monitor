@@ -1,8 +1,26 @@
 import { Elysia, t } from 'elysia';
-import { serialize as serializeCookie } from 'cookie';
 import type { User } from '../types';
 import { AuthService } from '../services/auth';
 import { LoggerService } from '../services/logger';
+
+// Cookie helper function
+const serializeCookie = (name: string, value: string, options: {
+  httpOnly?: boolean;
+  secure?: boolean;
+  sameSite?: 'strict' | 'lax' | 'none';
+  maxAge?: number;
+  path?: string;
+} = {}): string => {
+  let cookie = `${name}=${value}`;
+  
+  if (options.httpOnly) cookie += '; HttpOnly';
+  if (options.secure) cookie += '; Secure';
+  if (options.sameSite) cookie += `; SameSite=${options.sameSite}`;
+  if (options.maxAge !== undefined) cookie += `; Max-Age=${options.maxAge}`;
+  if (options.path) cookie += `; Path=${options.path}`;
+  
+  return cookie;
+};
 
 export function createAuthRoutes(authService: AuthService, logger: LoggerService) {
   return new Elysia({ prefix: '/api/auth' })
