@@ -7,12 +7,7 @@
 - **Database**: SQLite with Bun's native support
 - **Bundling**: Bun for both frontend and backend
 
-## Quick Start
-bun start  # Starts application on http://localhost:3001
-
-
 ## Project Structure
-
 ```
 monitor/
 ├── backend/
@@ -91,10 +86,8 @@ monitor/
 - Document complex business logic with comments
 
 ## Common Commands
-# Development
-bun start                    # Start full application
+bun start                    # Start full application on http://localhost:3001
 
-# Dependencies
 bun add <package>           # Add dependency
 bun add -d <package>        # Add dev dependency
 

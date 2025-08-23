@@ -184,8 +184,10 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
             <Stack spacing={1}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Avatar sx={{ 
-                  bgcolor: `${endpoint.cert_expires_in === null
+                  bgcolor: `${!endpoint.check_cert_expiry
                     ? 'grey'
+                    : endpoint.cert_expires_in === null
+                    ? 'info'
                     : endpoint.cert_expires_in <= 30
                     ? 'error'
                     : endpoint.cert_expires_in <= 90
@@ -201,11 +203,13 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
                 </Typography>
               </Box>
               <Typography variant="h6" component="div" sx={{ fontWeight: 'bold' }}>
-                {endpoint.check_cert_expiry && endpoint.cert_expires_in !== null
+                {!endpoint.check_cert_expiry
+                  ? 'Not enabled'
+                  : endpoint.cert_expires_in !== null
                   ? `${endpoint.cert_expires_in} days`
-                  : endpoint.check_cert_expiry
+                  : endpoint.last_checked
                   ? 'Check failed'
-                  : 'Not enabled'}
+                  : 'Checking...'}
               </Typography>
               {endpoint.cert_expiry_date && endpoint.cert_expires_in !== null && (
                 <Typography variant="caption" color="text.secondary">
