@@ -351,6 +351,7 @@ export function createEndpointsRoutes(
         if (newEndpoint) {
           logger.info(`Starting monitoring for new endpoint "${newEndpoint.name}" (ID: ${newEndpoint.id})`, 'MONITORING');
           monitoringService.startEndpointMonitoring(newEndpoint);
+          monitoringService.startCertificateMonitoring(newEndpoint);
 
           // Return the complete endpoint object with proper formatting (same as GET endpoint)
           const fullEndpoint = {
