@@ -144,3 +144,29 @@ export interface CertificateChain {
   isValid: boolean;
   errors?: string[];
 }
+
+// Tree structure types for endpoint grouping
+export interface EndpointGroup {
+  id: string;
+  name: string;
+  type: 'group';
+  collapsed: boolean;
+  children: (Endpoint | EndpointGroup)[];
+}
+
+export interface TreeNode {
+  id: string | number;
+  name: string;
+  type: 'endpoint' | 'group';
+  parentId?: string;
+  children?: TreeNode[];
+  collapsed?: boolean;
+  // Include all endpoint properties for endpoint nodes
+  endpoint?: Endpoint;
+}
+
+export interface EndpointTreeStructure {
+  nodes: TreeNode[];
+  groups: EndpointGroup[];
+  ungroupedEndpoints: Endpoint[];
+}

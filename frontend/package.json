@@ -17,6 +17,7 @@
     "@emotion/styled": "^11.14.1",
     "@mui/icons-material": "latest",
     "@mui/material": "latest",
+    "@revell29/dnd-kit-sortable-tree": "^0.0.2",
     "@types/react-color": "^3.0.13",
     "react": "^19.1.1",
     "react-color": "^2.19.3",

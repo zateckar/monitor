@@ -186,13 +186,26 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
                 <Avatar sx={{ 
                   bgcolor: `${!endpoint.check_cert_expiry
                     ? 'grey'
-                    : endpoint.cert_expires_in === null
-                    ? 'info'
-                    : endpoint.cert_expires_in <= 30
-                    ? 'error'
-                    : endpoint.cert_expires_in <= 90
-                    ? 'warning'
-                    : 'success'}.main`, 
+                    : endpoint.cert_expires_in !== null
+                    ? (endpoint.cert_expires_in <= 7
+                      ? 'error'
+                      : endpoint.cert_expires_in <= 21
+                      ? 'warning'
+                      : 'success')
+                    : (() => {
+                        // Determine color based on certificate check status
+                        try {
+                          const url = new URL(endpoint.url);
+                          if (url.protocol !== 'https:') {
+                            return 'grey'; // Not applicable for non-HTTPS
+                          }
+                        } catch {
+                          return 'grey'; // Invalid URL
+                        }
+                        
+                        // For HTTPS URLs, use info if checking, error if failed
+                        return endpoint.last_checked ? 'error' : 'info';
+                      })()}.main`, 
                   width: 32, 
                   height: 32 
                 }}>
@@ -207,9 +220,20 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
                   ? 'Not enabled'
                   : endpoint.cert_expires_in !== null
                   ? `${endpoint.cert_expires_in} days`
-                  : endpoint.last_checked
-                  ? 'Check failed'
-                  : 'Checking...'}
+                  : (() => {
+                      // Check if URL is HTTPS for certificate validation
+                      try {
+                        const url = new URL(endpoint.url);
+                        if (url.protocol !== 'https:') {
+                          return 'HTTPS only';
+                        }
+                      } catch {
+                        return 'Invalid URL';
+                      }
+                      
+                      // For HTTPS URLs, check if we've attempted monitoring
+                      return endpoint.last_checked ? 'Check failed' : 'Checking...';
+                    })()}
               </Typography>
               {endpoint.cert_expiry_date && endpoint.cert_expires_in !== null && (
                 <Typography variant="caption" color="text.secondary">

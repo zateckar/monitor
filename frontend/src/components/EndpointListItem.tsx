@@ -1,6 +1,5 @@
 import React from 'react';
-import { Card, CardContent, Typography, Box, CardActionArea, Chip, IconButton } from '@mui/material';
-import { DragIndicator } from '@mui/icons-material';
+import { Card, CardContent, Typography, Box, CardActionArea, Chip } from '@mui/material';
 import {
   useSortable
 } from '@dnd-kit/sortable';
@@ -54,26 +53,19 @@ const EndpointListItem: React.FC<EndpointListItemProps> = ({
           backgroundColor: 'action.disabledBackground'
         })
       }}>
-        <CardActionArea onClick={() => onSelect(endpoint)}>
+        <CardActionArea 
+          onClick={() => onSelect(endpoint)}
+          {...(isDraggable ? { ...attributes, ...listeners } : {})}
+          sx={{
+            ...(isDraggable && {
+              cursor: 'grab',
+              '&:active': { cursor: 'grabbing' }
+            })
+          }}
+        >
           <CardContent>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', flex: 1 }}>
-                {isDraggable && (
-                  <IconButton
-                    size="small"
-                    sx={{ 
-                      mr: 1, 
-                      cursor: 'grab',
-                      '&:active': { cursor: 'grabbing' },
-                      color: 'text.secondary'
-                    }}
-                    {...attributes}
-                    {...listeners}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <DragIndicator fontSize="small" />
-                  </IconButton>
-                )}
                 <Typography 
                   variant="body1" 
                   component="div"
