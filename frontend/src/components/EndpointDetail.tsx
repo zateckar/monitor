@@ -3,6 +3,7 @@ import { Typography, Card, CardContent, Box, Chip, Button, Select, MenuItem, For
 import type { Endpoint, NotificationService } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { getStoredTimePeriod, storeTimePeriod } from '../utils/localStorage';
+import { formatDateTime } from '../utils/timezone';
 import EndpointChart from './EndpointChart';
 import EndpointStats from './EndpointStats';
 import EditEndpointForm from './EditEndpointForm';
@@ -18,6 +19,7 @@ import HistoryIcon from '@mui/icons-material/History';
 import DataUsageIcon from '@mui/icons-material/DataUsage';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
+import AccessTimeIcon from '@mui/icons-material/AccessTime';
 
 interface EndpointDetailProps {
   endpoint: Endpoint | null;
@@ -196,6 +198,24 @@ const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, onUpdate, onD
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <MonitorHeartIcon color="primary" />
                   <Typography variant="h6">Recent Heartbeats</Typography>
+                </Box>
+              }
+              action={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, textAlign: 'right' }}>
+                  <AccessTimeIcon sx={{ fontSize: 16 }} color="action" />
+                  <Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '0.7rem' }}>
+                      Last Checked
+                    </Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 'bold', fontSize: '0.8rem' }}>
+                      {endpoint.last_checked ? formatDateTime(endpoint.last_checked).split(' ')[1] : 'Never'}
+                    </Typography>
+                    {endpoint.last_checked && (
+                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                        {formatDateTime(endpoint.last_checked).split(' ')[0]}
+                      </Typography>
+                    )}
+                  </Box>
                 </Box>
               }
             />

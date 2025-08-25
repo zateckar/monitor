@@ -24,14 +24,13 @@ import {
 } from '@mui/icons-material';
 import {
   DndContext,
-  closestCorners,
+  closestCenter,
   KeyboardSensor,
   PointerSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
   type DragOverEvent,
-  DragOverlay
 } from '@dnd-kit/core';
 import {
   arrayMove,
@@ -39,7 +38,6 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy
 } from '@dnd-kit/sortable';
-import { SortableTree } from '@revell29/dnd-kit-sortable-tree';
 import type { Endpoint, EndpointGroup, TreeNode } from '../types';
 import EndpointListItem from './EndpointListItem';
 import GroupingItem from './GroupingItem';
@@ -87,9 +85,9 @@ const EndpointList: React.FC<EndpointListProps> = ({
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
-        distance: 8,
-        delay: 100,
-        tolerance: 5,
+        distance: 3,
+        delay: 250,
+        tolerance: 8,
       },
     }),
     useSensor(KeyboardSensor, {
@@ -670,7 +668,7 @@ const EndpointList: React.FC<EndpointListProps> = ({
         // Flat List View
         <DndContext
           sensors={sensors}
-          collisionDetection={closestCorners}
+          collisionDetection={closestCenter}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
@@ -680,18 +678,14 @@ const EndpointList: React.FC<EndpointListProps> = ({
           >
             <List>
               {sortedEndpoints.map((endpoint) => (
-                <div 
+                <EndpointListItem
                   key={endpoint.id}
-                  onContextMenu={(e) => handleContextMenu(e, endpoint.id)}
-                >
-                  <EndpointListItem
-                    endpoint={endpoint}
-                    onSelect={onSelect}
-                    isSelected={endpoint.id === selectedId}
-                    onTogglePause={onTogglePause}
-                    isDraggable={true}
-                  />
-                </div>
+                  endpoint={endpoint}
+                  onSelect={onSelect}
+                  isSelected={endpoint.id === selectedId}
+                  onTogglePause={onTogglePause}
+                  isDraggable={true}
+                />
               ))}
             </List>
           </SortableContext>
@@ -700,7 +694,7 @@ const EndpointList: React.FC<EndpointListProps> = ({
         // Tree View
         <DndContext
           sensors={sensors}
-          collisionDetection={closestCorners}
+          collisionDetection={closestCenter}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
           onDragOver={handleDragOver}
@@ -734,18 +728,14 @@ const EndpointList: React.FC<EndpointListProps> = ({
                     {!group.collapsed && (
                       <Box sx={{ ml: 4, mr: 2 }}>
                         {groupEndpoints.map(endpoint => (
-                          <div 
+                          <EndpointListItem
                             key={endpoint.id}
-                            onContextMenu={(e) => handleContextMenu(e, endpoint.id)}
-                          >
-                            <EndpointListItem
-                              endpoint={endpoint}
-                              onSelect={onSelect}
-                              isSelected={endpoint.id === selectedId}
-                              onTogglePause={onTogglePause}
-                              isDraggable={true}
-                            />
-                          </div>
+                            endpoint={endpoint}
+                            onSelect={onSelect}
+                            isSelected={endpoint.id === selectedId}
+                            onTogglePause={onTogglePause}
+                            isDraggable={true}
+                          />
                         ))}
                       </Box>
                     )}
@@ -755,18 +745,14 @@ const EndpointList: React.FC<EndpointListProps> = ({
 
               {/* Ungrouped Endpoints - integrated without separation */}
               {ungroupedEndpoints.map(endpoint => (
-                <div 
+                <EndpointListItem
                   key={endpoint.id}
-                  onContextMenu={(e) => handleContextMenu(e, endpoint.id)}
-                >
-                  <EndpointListItem
-                    endpoint={endpoint}
-                    onSelect={onSelect}
-                    isSelected={endpoint.id === selectedId}
-                    onTogglePause={onTogglePause}
-                    isDraggable={true}
-                  />
-                </div>
+                  endpoint={endpoint}
+                  onSelect={onSelect}
+                  isSelected={endpoint.id === selectedId}
+                  onTogglePause={onTogglePause}
+                  isDraggable={true}
+                />
               ))}
             </List>
           </SortableContext>

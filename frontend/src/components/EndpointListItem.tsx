@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, CardContent, Typography, Box, CardActionArea, Chip } from '@mui/material';
+import { ListItem, Card, CardContent, Typography, Box, CardActionArea, Chip } from '@mui/material';
 import {
   useSortable
 } from '@dnd-kit/sortable';
@@ -37,6 +37,7 @@ const EndpointListItem: React.FC<EndpointListItemProps> = ({
     transition,
     opacity: isDragging ? 0.5 : 1,
   };
+
   const getUptimeColor = (uptime: number) => {
     if (uptime >= 99.9) return 'success';
     if (uptime >= 95) return 'warning';
@@ -44,25 +45,31 @@ const EndpointListItem: React.FC<EndpointListItemProps> = ({
   };
 
   return (
-    <div ref={setNodeRef} style={style}>
-      <Card sx={{ 
-        mb: 2, 
-        ...(isSelected && { backgroundColor: 'action.selected' }),
-        ...(endpoint.paused && { 
-          opacity: 0.6,
-          backgroundColor: 'action.disabledBackground'
-        })
-      }}>
-        <CardActionArea 
-          onClick={() => onSelect(endpoint)}
-          {...(isDraggable ? { ...attributes, ...listeners } : {})}
-          sx={{
-            ...(isDraggable && {
-              cursor: 'grab',
-              '&:active': { cursor: 'grabbing' }
-            })
-          }}
-        >
+    <ListItem
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      disablePadding
+      sx={{
+        cursor: isDraggable ? 'grab' : 'pointer',
+        '&:active': {
+          cursor: isDraggable ? 'grabbing' : 'pointer',
+        },
+        mb: 1,
+      }}
+    >
+      <Card 
+        sx={{ 
+          width: '100%',
+          ...(isSelected && { backgroundColor: 'action.selected' }),
+          ...(endpoint.paused && { 
+            opacity: 0.6,
+            backgroundColor: 'action.disabledBackground'
+          })
+        }}
+      >
+        <CardActionArea onClick={() => onSelect(endpoint)}>
           <CardContent>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', flex: 1 }}>
@@ -129,7 +136,7 @@ const EndpointListItem: React.FC<EndpointListItemProps> = ({
           </CardContent>
         </CardActionArea>
       </Card>
-    </div>
+    </ListItem>
   );
 };
 

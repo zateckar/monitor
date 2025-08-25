@@ -5,8 +5,7 @@ import {
   Typography, 
   Box, 
   IconButton, 
-  Chip,
-  CardActionArea 
+  Chip
 } from '@mui/material';
 import { 
   ExpandMore, 

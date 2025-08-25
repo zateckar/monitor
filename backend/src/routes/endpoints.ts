@@ -8,6 +8,7 @@ import { CertificateService } from '../services/certificate';
 import { validateEndpoint } from '../utils/validation';
 import { calculateGapAwareUptime } from '../utils/uptime';
 import { formatDuration } from '../utils/formatting';
+import { calculateResponseTimeStatistics } from '../utils/statistics';
 
 export function createEndpointsRoutes(
   db: Database,
@@ -76,10 +77,39 @@ export function createEndpointsRoutes(
       const period = rangeToPeriod[range];
       const stats = await calculateGapAwareUptime(db, parseInt(id), heartbeatInterval, period);
 
+      // Get response times for statistical calculations
+      const rangeToSql = {
+        '3h': "datetime('now', '-3 hours')",
+        '6h': "datetime('now', '-6 hours')",
+        '24h': "datetime('now', '-1 day')",
+        '1w': "datetime('now', '-7 days')",
+      };
+
+      const since = rangeToSql[range];
+      const responseTimes = db.query(
+        `SELECT response_time FROM response_times 
+         WHERE endpoint_id = ? AND created_at >= ${since} AND response_time IS NOT NULL AND response_time > 0
+         ORDER BY created_at ASC`
+      ).all(id) as any[];
+
+      // Calculate advanced statistics
+      const responseTimeValues = responseTimes.map(row => row.response_time);
+      const advancedStats = calculateResponseTimeStatistics(responseTimeValues);
+
       return {
         avg_response: stats?.avg_response || 0,
         uptime: stats?.uptime || 0,
         monitoring_coverage: stats?.monitoring_coverage || 0,
+        // Add new statistical measures
+        p50: advancedStats.p50,
+        p90: advancedStats.p90,
+        p95: advancedStats.p95,
+        p99: advancedStats.p99,
+        std_dev: advancedStats.std_dev,
+        mad: advancedStats.mad,
+        min_response: advancedStats.min,
+        max_response: advancedStats.max,
+        response_count: advancedStats.count
       };
     })
     .get('/endpoints/:id/response-times', async ({ params, query }) => {
