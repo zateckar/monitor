@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Typography, Card, Box, CircularProgress, LinearProgress, Avatar, Stack, Button, Chip, Divider } from '@mui/material';
+import { Typography, Card, Box, CircularProgress, LinearProgress, Avatar, Stack,  Chip, Divider } from '@mui/material';
 import type { Endpoint } from '../types';
-import { formatDateTime, formatDate } from '../utils/timezone';
-import AccessTimeIcon from '@mui/icons-material/AccessTime';
+import { formatDate } from '../utils/timezone';
 import SpeedIcon from '@mui/icons-material/Speed';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import SecurityIcon from '@mui/icons-material/Security';
@@ -11,8 +10,9 @@ import BarChartIcon from '@mui/icons-material/BarChart';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import ScatterPlotIcon from '@mui/icons-material/ScatterPlot';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
-import TimelineIcon from '@mui/icons-material/Timeline';
+import LanguageIcon from '@mui/icons-material/Language';
 import CertificateModal from './CertificateModal';
+import type { DomainInfo } from '../types';
 
 interface EndpointStatsProps {
   endpoint: Endpoint;
@@ -37,12 +37,17 @@ interface Stats {
 
 const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) => {
   const [stats, setStats] = useState<Stats | null>(null);
+  const [domainInfo, setDomainInfo] = useState<DomainInfo | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingDomain, setLoadingDomain] = useState(true);
   const [certificateModalOpen, setCertificateModalOpen] = useState(false);
 
   useEffect(() => {
     if (endpoint && typeof endpoint.id === 'number') {
       setLoading(true);
+      setLoadingDomain(true);
+
+      // Fetch main stats
       fetch(`/api/endpoints/${endpoint.id}/stats?range=${timeRange}`)
         .then(res => res.json())
         .then(data => {
@@ -50,6 +55,15 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
           setLoading(false);
         })
         .catch(() => setLoading(false));
+
+      // Fetch domain info
+      fetch(`/api/endpoints/${endpoint.id}/domain-info`)
+        .then(res => res.ok ? res.json() : null)
+        .then(data => {
+          setDomainInfo(data);
+          setLoadingDomain(false);
+        })
+        .catch(() => setLoadingDomain(false));
     }
   }, [endpoint, timeRange]);
 
@@ -64,6 +78,13 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
     if (value >= 99.9) return 'success';
     if (value >= 95) return 'warning';
     return 'error';
+  };
+
+  const getDomainExpiryColor = (days: number | null) => {
+    if (days === null) return 'grey';
+    if (days <= 14) return 'error';
+    if (days <= 45) return 'warning';
+    return 'success';
   };
 
   const getCoverageColor = (coverage: number) => {
@@ -425,7 +446,7 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
             icon={<MonitorIcon sx={{ fontSize: 16 }} />}
             title={`Coverage (${timeRangeLabel})`}
             value={`${stats.monitoring_coverage.toFixed(1)}%`}
-            subtitle={stats.monitoring_coverage < 100 ? 'Some gaps detected' : 'Complete coverage'}
+            subtitle={stats.monitoring_coverage < 99.5 ? 'Some gaps detected' : 'Complete coverage'}
             progress={stats.monitoring_coverage}
             color={getCoverageColor(stats.monitoring_coverage)}
           />
@@ -438,7 +459,7 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
           {/* Response Time Summary - Grouped */}
           <ResponseTimeCard />
 
-          {/* Certificate Expiry - Clickable */}
+          {/* Certificate & Domain Expiry Card - Clickable */}
           <Card 
             variant="outlined" 
             sx={{ 
@@ -452,6 +473,7 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
             onClick={() => endpoint.check_cert_expiry && setCertificateModalOpen(true)}
           >
             <Stack spacing={1}>
+              {/* Certificate Section */}
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Avatar sx={{ 
                   bgcolor: `${!endpoint.check_cert_expiry
@@ -462,54 +484,64 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
                       : endpoint.cert_expires_in <= 21
                       ? 'warning'
                       : 'success')
-                    : (() => {
-                        // Determine color based on certificate check status
-                        try {
-                          const url = new URL(endpoint.url);
-                          if (url.protocol !== 'https:') {
-                            return 'grey'; // Not applicable for non-HTTPS
-                          }
-                        } catch {
-                          return 'grey'; // Invalid URL
-                        }
-                        
-                        // For HTTPS URLs, use info if checking, error if failed
-                        return endpoint.last_checked ? 'error' : 'info';
-                      })()}.main`, 
+                    : 'info'}.main`, 
                   width: 32, 
                   height: 32 
                 }}>
                   <SecurityIcon sx={{ fontSize: 18 }} />
                 </Avatar>
-                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500 }}>
-                  Certificate
-                </Typography>
+                <Box>
+                  <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, display: 'block' }}>
+                    Certificate
+                  </Typography>
+                  <Typography variant="h6" component="div" sx={{ fontWeight: 'bold', lineHeight: 1.2 }}>
+                    {!endpoint.check_cert_expiry
+                      ? 'Not enabled'
+                      : endpoint.cert_expires_in !== null
+                      ? `${endpoint.cert_expires_in} days`
+                      : 'Checking...'}
+                  </Typography>
+                  {endpoint.cert_expiry_date && endpoint.cert_expires_in !== null && (
+                    <Typography variant="caption" color="text.secondary">
+                      {formatDate(endpoint.cert_expiry_date)}
+                    </Typography>
+                  )}
+                </Box>
               </Box>
-              <Typography variant="h6" component="div" sx={{ fontWeight: 'bold' }}>
-                {!endpoint.check_cert_expiry
-                  ? 'Not enabled'
-                  : endpoint.cert_expires_in !== null
-                  ? `${endpoint.cert_expires_in} days`
-                  : (() => {
-                      // Check if URL is HTTPS for certificate validation
-                      try {
-                        const url = new URL(endpoint.url);
-                        if (url.protocol !== 'https:') {
-                          return 'HTTPS only';
-                        }
-                      } catch {
-                        return 'Invalid URL';
-                      }
-                      
-                      // For HTTPS URLs, check if we've attempted monitoring
-                      return endpoint.last_checked ? 'Check failed' : 'Checking...';
-                    })()}
-              </Typography>
-              {endpoint.cert_expiry_date && endpoint.cert_expires_in !== null && (
-                <Typography variant="caption" color="text.secondary">
-                  {formatDate(endpoint.cert_expiry_date)}
-                </Typography>
-              )}
+
+              <Divider />
+
+              {/* Domain Section */}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Avatar sx={{ 
+                  bgcolor: `${getDomainExpiryColor(domainInfo?.daysRemaining ?? null)}.main`,
+                  width: 32, 
+                  height: 32 
+                }}>
+                  <LanguageIcon sx={{ fontSize: 18 }} />
+                </Avatar>
+                <Box>
+                  <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, display: 'block' }}>
+                    Domain
+                  </Typography>
+                  {loadingDomain ? (
+                    <CircularProgress size={20} />
+                  ) : domainInfo && domainInfo.daysRemaining !== null ? (
+                    <>
+                      <Typography variant="h6" component="div" sx={{ fontWeight: 'bold', lineHeight: 1.2 }}>
+                        {`${domainInfo.daysRemaining} days`}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {formatDate(domainInfo.expiryDate!)}
+                      </Typography>
+                    </>
+                  ) : (
+                    <Typography variant="h6" component="div" sx={{ fontWeight: 'bold', lineHeight: 1.2 }}>
+                      N/A
+                    </Typography>
+                  )}
+                </Box>
+              </Box>
             </Stack>
           </Card>
         </Box>

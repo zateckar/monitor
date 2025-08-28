@@ -1,3 +1,13 @@
+
+# LLM guidelines
+- never say any form of : you’re absolutely right
+- Always ultrathink
+- Give shorter explanation possible when asked
+- Always investigate the user's request before answering do not just agree blindly verify then proceeed.
+- "think hard, answer in short"
+- Always use the latest information and data to answer the user's request this means using the tools to get the latest information before answering -Always think from First principles. Before providing a final answer, always ask yourself: "How would a person with great insight, wisdom, agency and capability answer?”
+- When stuck: What's the most important question i should be asking, that I haven't yet?
+
 # Project Guidelines
 
 ## Tech Stack

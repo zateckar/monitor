@@ -19,7 +19,7 @@ import HistoryIcon from '@mui/icons-material/History';
 import DataUsageIcon from '@mui/icons-material/DataUsage';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
-import AccessTimeIcon from '@mui/icons-material/AccessTime';
+
 
 interface EndpointDetailProps {
   endpoint: Endpoint | null;
@@ -202,7 +202,6 @@ const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, onUpdate, onD
               }
               action={
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, textAlign: 'right' }}>
-                  <AccessTimeIcon sx={{ fontSize: 16 }} color="action" />
                   <Box>
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '0.7rem' }}>
                       Last Checked
@@ -211,8 +210,8 @@ const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, onUpdate, onD
                       {endpoint.last_checked ? formatDateTime(endpoint.last_checked).split(' ')[1] : 'Never'}
                     </Typography>
                     {endpoint.last_checked && (
-                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
-                        {formatDateTime(endpoint.last_checked).split(' ')[0]}
+                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.8rem' }}>
+                        {formatDateTime(endpoint.last_checked).split(' ')[0].replace(',', '')}
                       </Typography>
                     )}
                   </Box>

@@ -15,13 +15,15 @@ interface EndpointListItemProps {
   isSelected: boolean;
   onTogglePause?: (id: number) => void;
   isDraggable?: boolean;
+  onContextMenu?: (event: React.MouseEvent) => void;
 }
 
 const EndpointListItem: React.FC<EndpointListItemProps> = ({
   endpoint,
   onSelect,
   isSelected,
-  isDraggable = false
+  isDraggable = false,
+  onContextMenu
 }) => {
   const {
     attributes,
@@ -58,6 +60,7 @@ const EndpointListItem: React.FC<EndpointListItemProps> = ({
         },
         mb: 1,
       }}
+      onContextMenu={onContextMenu}
     >
       <Card 
         sx={{ 

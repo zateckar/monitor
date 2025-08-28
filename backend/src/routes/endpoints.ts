@@ -4,6 +4,7 @@ import type { Endpoint } from '../types';
 import { AuthService } from '../services/auth';
 import { LoggerService } from '../services/logger';
 import { MonitoringService } from '../services/monitoring';
+import { DomainInfoService } from '../services/domain-info';
 import { CertificateService } from '../services/certificate';
 import { validateEndpoint } from '../utils/validation';
 import { calculateGapAwareUptime } from '../utils/uptime';
@@ -15,11 +16,12 @@ export function createEndpointsRoutes(
   authService: AuthService, 
   logger: LoggerService,
   monitoringService: MonitoringService,
+  domainInfoService: DomainInfoService,
+  certificateService: CertificateService,
   requireAuth: (handler: any) => any,
   requireRole: (role: 'admin' | 'user') => (handler: any) => any
 ) {
-  // Get certificate service from monitoring service (it already has it)
-  const certificateService = (monitoringService as any).certificateService;
+  
   return new Elysia({ prefix: '/api' })
     .get('/endpoints', async () => {
       const endpoints: Endpoint[] = db.query('SELECT * FROM endpoints').all() as Endpoint[];
@@ -190,7 +192,7 @@ export function createEndpointsRoutes(
 
       // Get all status changes for this endpoint, ordered by time
       const statusChanges = db.query(
-        `SELECT status, created_at, response_time
+        `SELECT status, created_at, response_time, failure_reason
          FROM response_times 
          WHERE endpoint_id = ? 
          ORDER BY created_at DESC 
@@ -206,6 +208,7 @@ export function createEndpointsRoutes(
       }> = [];
 
       let currentOutageStart: string | null = null;
+      let currentOutageReason: string = 'Service check failed';
       
       // Process status changes in reverse chronological order to build outage periods
       for (let i = statusChanges.length - 1; i >= 0; i--) {
@@ -214,6 +217,7 @@ export function createEndpointsRoutes(
         if (change.status === 'DOWN' && !currentOutageStart) {
           // Start of an outage
           currentOutageStart = change.created_at;
+          currentOutageReason = change.failure_reason || 'Service check failed';
         } else if (change.status === 'UP' && currentOutageStart) {
           // End of an outage
           const startTime = new Date(currentOutageStart);
@@ -225,10 +229,11 @@ export function createEndpointsRoutes(
             ended_at: change.created_at,
             duration_ms: durationMs,
             duration_text: formatDuration(durationMs),
-            reason: 'Service check failed' // Default reason as we don't track specific reasons yet
+            reason: currentOutageReason
           });
           
           currentOutageStart = null;
+          currentOutageReason = 'Service check failed';
         }
       }
       
@@ -243,7 +248,7 @@ export function createEndpointsRoutes(
           ended_at: null,
           duration_ms: durationMs,
           duration_text: formatDuration(durationMs) + ' (ongoing)',
-          reason: 'Service check failed'
+          reason: currentOutageReason
         });
       }
 
@@ -292,6 +297,120 @@ export function createEndpointsRoutes(
       }
 
       return result.result;
+    })
+    .get('/endpoints/:id/domain-info', async ({ params, set }) => {
+      const { id } = params;
+      
+      // Get cached domain info from database
+      const endpoint = db.query('SELECT domain_expires_in, domain_expiry_date, domain_creation_date, domain_updated_date FROM endpoints WHERE id = ?').get(id) as any;
+      if (!endpoint) {
+        set.status = 404;
+        return { error: 'Endpoint not found' };
+      }
+
+      // Return cached domain information (same format as DomainInfo interface)
+      return {
+        creationDate: endpoint.domain_creation_date ? new Date(endpoint.domain_creation_date) : null,
+        updatedDate: endpoint.domain_updated_date ? new Date(endpoint.domain_updated_date) : null,
+        expiryDate: endpoint.domain_expiry_date ? new Date(endpoint.domain_expiry_date) : null,
+        daysRemaining: endpoint.domain_expires_in
+      };
+    })
+    .get('/endpoints/:id/enhanced-domain-info', async ({ params, set }) => {
+      const { id } = params;
+      
+      // Get endpoint URL and cached domain info
+      const endpoint = db.query('SELECT url, domain_expires_in, domain_expiry_date, domain_creation_date, domain_updated_date FROM endpoints WHERE id = ?').get(id) as any;
+      if (!endpoint) {
+        set.status = 404;
+        return { error: 'Endpoint not found' };
+      }
+
+      try {
+        // Get enhanced domain information using the domain info service
+        const domainResult = await domainInfoService.getDomainInfo(endpoint.url);
+        
+        // Base domain info (use fresh data if available, fallback to cached)
+        const domainInfo = {
+          creationDate: domainResult.success ? domainResult.result.creationDate : 
+            (endpoint.domain_creation_date ? new Date(endpoint.domain_creation_date) : null),
+          updatedDate: domainResult.success ? domainResult.result.updatedDate : 
+            (endpoint.domain_updated_date ? new Date(endpoint.domain_updated_date) : null),
+          expiryDate: domainResult.success ? domainResult.result.expiryDate : 
+            (endpoint.domain_expiry_date ? new Date(endpoint.domain_expiry_date) : null),
+          daysRemaining: domainResult.success ? domainResult.result.daysRemaining : endpoint.domain_expires_in
+        };
+
+        // Gather additional information
+        let dnsInfo = null;
+        let serverInfo = null;
+
+        try {
+          const parsedUrl = new URL(endpoint.url);
+          const hostname = parsedUrl.hostname;
+
+          // DNS lookup
+          try {
+            const dns = await import('dns').then(d => d.promises);
+            const [aRecords, txtRecords, mxRecords, nsRecords] = await Promise.allSettled([
+              dns.resolve4(hostname).catch(() => []),
+              dns.resolveTxt(hostname).catch(() => []),
+              dns.resolveMx(hostname).catch(() => []),
+              dns.resolveNs(hostname).catch(() => [])
+            ]);
+
+            // Try CNAME lookup
+            let cnameRecord = null;
+            try {
+              const cnames = await dns.resolveCname(hostname);
+              cnameRecord = cnames[0] || null;
+            } catch {
+              // CNAME lookup failed, which is normal for A records
+            }
+
+            dnsInfo = {
+              A: aRecords.status === 'fulfilled' ? aRecords.value : [],
+              CNAME: cnameRecord,
+              TXT: txtRecords.status === 'fulfilled' ? txtRecords.value.flat() : [],
+              MX: mxRecords.status === 'fulfilled' ? mxRecords.value : [],
+              NS: nsRecords.status === 'fulfilled' ? nsRecords.value : [],
+              SOA: null // Not implemented for now
+            };
+          } catch (err) {
+            logger.debug(`DNS lookup failed for ${hostname}: ${err}`, 'DOMAIN_INFO');
+          }
+
+          // Server info (only for HTTP endpoints)
+          if (endpoint.url.startsWith('http')) {
+            try {
+              const response = await fetch(endpoint.url, {
+                method: 'HEAD',
+                signal: AbortSignal.timeout(5000)
+              });
+              
+              serverInfo = {
+                httpStatus: response.status,
+                serverHeader: response.headers.get('server') || undefined
+              };
+            } catch (err) {
+              logger.debug(`Server info check failed for ${endpoint.url}: ${err}`, 'DOMAIN_INFO');
+            }
+          }
+        } catch (err) {
+          logger.debug(`URL parsing failed for ${endpoint.url}: ${err}`, 'DOMAIN_INFO');
+        }
+
+        return {
+          domain: domainInfo,
+          certificate: null, // Certificate info is handled separately
+          dns: dnsInfo,
+          server: serverInfo
+        };
+      } catch (error) {
+        logger.error(`Enhanced domain info failed for endpoint ${id}: ${error}`, 'DOMAIN_INFO');
+        set.status = 500;
+        return { error: 'Failed to fetch enhanced domain information' };
+      }
     })
     .delete('/endpoints/:id/heartbeats', async ({ params }) => {
       const { id } = params;

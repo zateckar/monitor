@@ -4,8 +4,6 @@ import {
   List, 
   Typography, 
   Box, 
-  ButtonGroup, 
-  Button, 
   Tooltip,
   IconButton,
   Dialog,
@@ -14,12 +12,11 @@ import {
   DialogActions,
   TextField,
   Menu,
-  MenuItem
+  MenuItem,
+  Button
 } from '@mui/material';
 import {
   Add,
-  AccountTree,
-  ViewList,
   CreateNewFolder
 } from '@mui/icons-material';
 import {
@@ -30,7 +27,6 @@ import {
   useSensor,
   useSensors,
   type DragEndEvent,
-  type DragOverEvent,
 } from '@dnd-kit/core';
 import {
   arrayMove,
@@ -38,7 +34,7 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy
 } from '@dnd-kit/sortable';
-import type { Endpoint, EndpointGroup, TreeNode } from '../types';
+import type { Endpoint, EndpointGroup, SortableItem } from '../types';
 import EndpointListItem from './EndpointListItem';
 import GroupingItem from './GroupingItem';
 
@@ -50,8 +46,6 @@ interface EndpointListProps {
   onAddEndpoint?: () => void;
 }
 
-type ViewMode = 'list' | 'tree';
-
 const EndpointList: React.FC<EndpointListProps> = ({
   endpoints,
   onSelect,
@@ -59,14 +53,7 @@ const EndpointList: React.FC<EndpointListProps> = ({
   onTogglePause,
   onAddEndpoint,
 }) => {
-  const [viewMode, setViewMode] = useState<ViewMode>('list');
-  const [customOrder, setCustomOrder] = useState<(string | number)[]>([]);
-  const [groups, setGroups] = useState<EndpointGroup[]>([]);
-  
-  // Automatically enable tree view when groups exist
-  const hasGroups = groups.length > 0;
-  const effectiveViewMode = hasGroups ? 'tree' : viewMode;
-  const [endpointGroupMap, setEndpointGroupMap] = useState<Map<string | number, string>>(new Map());
+  const [items, setItems] = useState<SortableItem[]>([]);
   const [isCreateGroupDialogOpen, setIsCreateGroupDialogOpen] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [contextMenu, setContextMenu] = useState<{
@@ -76,10 +63,7 @@ const EndpointList: React.FC<EndpointListProps> = ({
   } | null>(null);
   const [activeId, setActiveId] = useState<string | number | null>(null);
   
-  const isInitialLoadRef = useRef<boolean>(true);
   const hasInitializedStateRef = useRef<boolean>(false);
-
-  // Get auth context to ensure we only load preferences when authenticated
   const { user, loading: authLoading } = useAuth();
 
   const sensors = useSensors(
@@ -95,210 +79,100 @@ const EndpointList: React.FC<EndpointListProps> = ({
     })
   );
 
-  // Save preferences to backend
   const savePreference = async (key: string, value: any) => {
     try {
-      const response = await fetch(`/api/preferences/${key}`, {
+      await fetch(`/api/preferences/${key}`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ value }),
       });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
     } catch (error) {
-      console.error(`Failed to save ${key} preference to backend:`, error);
-      // Fallback to localStorage
-      try {
-        localStorage.setItem(key, JSON.stringify(value));
-      } catch (localError) {
-        console.error(`Failed to save ${key} preference to localStorage:`, localError);
-      }
+      console.error(`Failed to save ${key} preference:`, error);
     }
   };
 
-  // Load preferences from backend only after authentication is complete
+  const persistState = (updatedItems: SortableItem[]) => {
+    if (!hasInitializedStateRef.current) return;
+
+    const customOrder: (string | number)[] = [];
+    const groups: EndpointGroup[] = [];
+    const endpointGroupMap: { [key: string]: string } = {};
+
+    updatedItems.forEach(item => {
+      if (item.type === 'group') {
+        groups.push({ ...item, children: [] }); // Don't save children in group definition
+        item.children.forEach(child => {
+          customOrder.push(child.id);
+          endpointGroupMap[child.id] = item.id;
+        });
+      } else {
+        customOrder.push(item.id);
+      }
+    });
+
+    savePreference('endpoint_custom_order', customOrder);
+    savePreference('endpoint_groups', groups);
+    savePreference('endpoint_group_map', endpointGroupMap);
+  };
+
   useEffect(() => {
-    // Don't load preferences if auth is still loading or user is not authenticated
-    if (authLoading || !user) {
-      return;
-    }
+    if (authLoading || !user) return;
 
     const loadPreferences = async () => {
       try {
-        const response = await fetch('/api/preferences', {
-          credentials: 'include',
-        });
-        
+        const response = await fetch('/api/preferences', { credentials: 'include' });
         if (response.ok) {
-          const preferences = await response.json();
+          const prefs = await response.json();
+          const customOrder = prefs.endpoint_custom_order || [];
+          const groups = prefs.endpoint_groups || [];
+          const groupMap = prefs.endpoint_group_map || {};
           
-          if (preferences.endpoint_custom_order) {
-            setCustomOrder(preferences.endpoint_custom_order);
-          }
-          
+          const endpointsMap = new Map(endpoints.map((ep: Endpoint) => [ep.id, ep]));
+          const orderedEndpoints = customOrder
+            .map((id: string | number) => endpointsMap.get(id))
+            .filter((ep?: Endpoint): ep is Endpoint => !!ep);
 
-          if (preferences.endpoint_view_mode) {
-            setViewMode(preferences.endpoint_view_mode);
-          }
+          const usedIds = new Set(orderedEndpoints.map((ep: Endpoint) => ep.id));
+          endpoints.forEach((ep: Endpoint) => {
+            if (!usedIds.has(ep.id)) orderedEndpoints.push(ep);
+          });
 
-          if (preferences.endpoint_groups) {
-            setGroups(preferences.endpoint_groups);
-          }
+          const newItems: SortableItem[] = [];
+          const groupChildren: { [key: string]: Endpoint[] } = {};
 
-          if (preferences.endpoint_group_map) {
-            // Ensure keys are converted to proper types (numbers if they can be parsed, otherwise strings)
-            const groupMapEntries = Object.entries(preferences.endpoint_group_map).map(([key, value]) => {
-              const numericKey = !isNaN(Number(key)) ? Number(key) : key;
-              return [numericKey, value as string] as [string | number, string];
+          orderedEndpoints.forEach((ep: Endpoint) => {
+            const groupId = groupMap[ep.id];
+            if (groupId) {
+              if (!groupChildren[groupId]) groupChildren[groupId] = [];
+              groupChildren[groupId].push(ep);
+            }
+          });
+
+          groups.forEach((group: EndpointGroup) => {
+            newItems.push({
+              ...group,
+              children: groupChildren[group.id] || []
             });
-            setEndpointGroupMap(new Map(groupMapEntries));
-          }
-        } else {
-          console.warn('Failed to load preferences from backend, status:', response.status);
-          // Fallback to localStorage for backward compatibility
-          loadFromLocalStorage();
+          });
+
+          const groupedEndpointIds = new Set(Object.values(groupMap));
+          orderedEndpoints.forEach((ep: Endpoint) => {
+            if (!groupMap[ep.id]) {
+              newItems.push({ ...ep, type: 'endpoint' as const });
+            }
+          });
+          
+          setItems(newItems);
         }
       } catch (error) {
         console.error('Failed to load preferences:', error);
-        // Fallback to localStorage for backward compatibility
-        loadFromLocalStorage();
       }
-      
-      isInitialLoadRef.current = false;
       hasInitializedStateRef.current = true;
     };
 
-    const loadFromLocalStorage = () => {
-      const savedOrder = localStorage.getItem('endpoint_custom_order');
-      const savedViewMode = localStorage.getItem('endpoint_view_mode') as ViewMode;
-      const savedGroups = localStorage.getItem('endpoint_groups');
-      const savedGroupMap = localStorage.getItem('endpoint_group_map');
-      
-      if (savedOrder) {
-        try {
-          setCustomOrder(JSON.parse(savedOrder));
-        } catch (error) {
-          console.error('Failed to parse saved custom order:', error);
-        }
-      }
-
-      if (savedViewMode) {
-        setViewMode(savedViewMode);
-      }
-
-      if (savedGroups) {
-        try {
-          setGroups(JSON.parse(savedGroups));
-        } catch (error) {
-          console.error('Failed to parse saved groups:', error);
-        }
-      }
-
-      if (savedGroupMap) {
-        try {
-          const groupMapData = JSON.parse(savedGroupMap);
-          setEndpointGroupMap(new Map(Object.entries(groupMapData)));
-        } catch (error) {
-          console.error('Failed to parse saved group map:', error);
-        }
-      }
-    };
-
     loadPreferences();
-  }, [authLoading, user]); // Depend on auth state
-
-  // Order endpoints based on custom order
-  const sortedEndpoints = useMemo(() => {
-    if (endpoints.length === 0) return [];
-
-    // Use custom order
-    if (customOrder.length === 0) return endpoints;
-
-    const endpointsMap = new Map(endpoints.map(ep => [ep.id, ep]));
-    const orderedEndpoints: Endpoint[] = [];
-    const usedIds = new Set();
-
-    customOrder.forEach(id => {
-      const endpoint = endpointsMap.get(id);
-      if (endpoint) {
-        orderedEndpoints.push(endpoint);
-        usedIds.add(id);
-      }
-    });
-
-    endpoints.forEach(endpoint => {
-      if (!usedIds.has(endpoint.id)) {
-        orderedEndpoints.push(endpoint);
-      }
-    });
-
-    return orderedEndpoints;
-  }, [endpoints, customOrder]);
-
-  // Get ungrouped endpoints
-  const ungroupedEndpoints = useMemo(() => {
-    return sortedEndpoints.filter(endpoint => !endpointGroupMap.has(endpoint.id));
-  }, [sortedEndpoints, endpointGroupMap]);
-
-  // Get grouped endpoints
-  const groupedEndpoints = useMemo(() => {
-    const result: { [groupId: string]: Endpoint[] } = {};
-    
-    groups.forEach(group => {
-      result[group.id] = [];
-    });
-
-    sortedEndpoints.forEach(endpoint => {
-      const groupId = endpointGroupMap.get(endpoint.id);
-      if (groupId && result[groupId]) {
-        result[groupId].push(endpoint);
-      }
-    });
-
-    return result;
-  }, [sortedEndpoints, endpointGroupMap, groups]);
-
-  // Tree structure for SortableTree
-  const treeItems = useMemo(() => {
-    const items: TreeNode[] = [];
-
-    // Add groups and their children
-    groups.forEach(group => {
-      const groupEndpoints = groupedEndpoints[group.id] || [];
-      const children: TreeNode[] = groupEndpoints.map(endpoint => ({
-        id: endpoint.id,
-        name: endpoint.name,
-        type: 'endpoint' as const,
-        parentId: group.id,
-        endpoint
-      }));
-
-      items.push({
-        id: group.id,
-        name: group.name,
-        type: 'group' as const,
-        collapsed: group.collapsed,
-        children
-      });
-    });
-
-    // Add ungrouped endpoints
-    ungroupedEndpoints.forEach(endpoint => {
-      items.push({
-        id: endpoint.id,
-        name: endpoint.name,
-        type: 'endpoint' as const,
-        endpoint
-      });
-    });
-
-    return items;
-  }, [groups, groupedEndpoints, ungroupedEndpoints]);
+  }, [authLoading, user, endpoints]);
 
   const handleDragStart = (event: any) => {
     setActiveId(event.active.id);
@@ -307,156 +181,87 @@ const EndpointList: React.FC<EndpointListProps> = ({
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     setActiveId(null);
-
+  
     if (!over || active.id === over.id) return;
-
-    if (effectiveViewMode === 'list') {
-      // Handle flat list drag and drop
-      const oldIndex = sortedEndpoints.findIndex(ep => ep.id === active.id);
-      const newIndex = sortedEndpoints.findIndex(ep => ep.id === over.id);
-
-      if (oldIndex !== -1 && newIndex !== -1) {
-        const newOrder = arrayMove(sortedEndpoints, oldIndex, newIndex);
-        const newCustomOrder = newOrder.map(ep => ep.id);
-        setCustomOrder(newCustomOrder);
-        
-        if (hasInitializedStateRef.current) {
-          savePreference('endpoint_custom_order', newCustomOrder);
-        }
-      }
-    } else {
-      // Handle tree view drag and drop
-      const activeId = active.id;
-      const overId = over.id;
-      
-      // Find if active item is an endpoint
-      const activeEndpoint = sortedEndpoints.find(ep => ep.id === activeId);
-      
-      // Find if over item is a group
-      const overGroup = groups.find(group => group.id === overId);
-      
-      if (activeEndpoint) {
-        const currentGroupId = endpointGroupMap.get(activeId);
-        
-        if (overGroup) {
-          // Moving endpoint to a group
-          if (currentGroupId !== overGroup.id) {
-            const updatedGroupMap = new Map(endpointGroupMap);
-            updatedGroupMap.set(activeId, overGroup.id);
-            setEndpointGroupMap(updatedGroupMap);
-            
-            if (hasInitializedStateRef.current) {
-              savePreference('endpoint_group_map', Object.fromEntries(updatedGroupMap));
-            }
-          }
-        } else {
-          // Check if dropping on another endpoint
-          const overEndpoint = sortedEndpoints.find(ep => ep.id === overId);
-          if (overEndpoint) {
-            const overGroupId = endpointGroupMap.get(overId);
-            
-            if (currentGroupId !== overGroupId) {
-              // Move to same group as target endpoint
-              const updatedGroupMap = new Map(endpointGroupMap);
-              if (overGroupId) {
-                updatedGroupMap.set(activeId, overGroupId);
-              } else {
-                updatedGroupMap.delete(activeId);
-              }
-              setEndpointGroupMap(updatedGroupMap);
-              
-              if (hasInitializedStateRef.current) {
-                savePreference('endpoint_group_map', Object.fromEntries(updatedGroupMap));
-              }
-            } else {
-              // Reorder within the same group or ungrouped
-              const currentItems = overGroupId ? 
-                sortedEndpoints.filter(ep => endpointGroupMap.get(ep.id) === overGroupId) :
-                ungroupedEndpoints;
-              
-              const oldIndex = currentItems.findIndex(ep => ep.id === activeId);
-              const newIndex = currentItems.findIndex(ep => ep.id === overId);
-              
-              if (oldIndex !== -1 && newIndex !== -1) {
-                const reorderedItems = arrayMove(currentItems, oldIndex, newIndex);
-                
-                // Update the custom order to reflect the new arrangement
-                const newCustomOrder = [...customOrder];
-                
-                // Remove the dragged item from its old position
-                const draggedItemIndex = newCustomOrder.indexOf(activeId);
-                if (draggedItemIndex !== -1) {
-                  newCustomOrder.splice(draggedItemIndex, 1);
-                }
-                
-                // Find the new position in the overall order
-                const overItemIndex = newCustomOrder.indexOf(overId);
-                if (overItemIndex !== -1) {
-                  newCustomOrder.splice(overItemIndex, 0, activeId);
-                } else {
-                  newCustomOrder.push(activeId);
-                }
-                
-                setCustomOrder(newCustomOrder);
-                
-                if (hasInitializedStateRef.current) {
-                  savePreference('endpoint_custom_order', newCustomOrder);
-                }
-              }
-            }
-          }
-        }
-      } else {
-        // Handle group reordering
-        const activeGroup = groups.find(group => group.id === activeId);
-        const overGroup = groups.find(group => group.id === overId);
-        
-        if (activeGroup && overGroup) {
-          const oldIndex = groups.findIndex(group => group.id === activeId);
-          const newIndex = groups.findIndex(group => group.id === overId);
-          
-          if (oldIndex !== -1 && newIndex !== -1) {
-            const newGroupOrder = arrayMove(groups, oldIndex, newIndex);
-            setGroups(newGroupOrder);
-            
-            if (hasInitializedStateRef.current) {
-              savePreference('endpoint_groups', newGroupOrder);
-            }
-          }
-        }
-      }
-    }
-  };
-
-  const handleDragOver = (event: DragOverEvent) => {
-    const { active, over } = event;
-    
-    if (!over || viewMode === 'list') return;
-
+  
     const activeId = active.id;
     const overId = over.id;
-    
-    // Find if active item is an endpoint
-    const activeEndpoint = sortedEndpoints.find(ep => ep.id === activeId);
-    
-    if (activeEndpoint) {
-      // Allow dropping on groups and other endpoints
-      const overGroup = groups.find(group => group.id === overId);
-      const overEndpoint = sortedEndpoints.find(ep => ep.id === overId);
-      
-      if (overGroup || overEndpoint) {
-        // This enables dropping on groups and endpoints
-        return;
+  
+    setItems(currentItems => {
+      let newItems = [...currentItems];
+      let activeItem: SortableItem | Endpoint | undefined;
+      let activeParent: EndpointGroup | undefined;
+  
+      // Find active item and its parent
+      for (const item of newItems) {
+        if (item.id === activeId) {
+          activeItem = item;
+          break;
+        }
+        if (item.type === 'group') {
+          const childIndex = item.children.findIndex(c => c.id === activeId);
+          if (childIndex !== -1) {
+            activeItem = item.children[childIndex];
+            activeParent = item;
+            break;
+          }
+        }
       }
-    }
-  };
-
-
-  const handleViewModeChange = (mode: ViewMode) => {
-    setViewMode(mode);
-    if (hasInitializedStateRef.current) {
-      savePreference('endpoint_view_mode', mode);
-    }
+  
+      if (!activeItem) return currentItems;
+  
+      // Remove active item from its original position
+      if (activeParent) {
+        const childIndex = activeParent.children.findIndex(c => c.id === activeId);
+        activeParent.children.splice(childIndex, 1);
+      } else {
+        const topLevelIndex = newItems.findIndex(item => item.id === activeId);
+        if (topLevelIndex !== -1) {
+          newItems.splice(topLevelIndex, 1);
+        }
+      }
+  
+      // Find over item and its parent
+      let overItem: SortableItem | Endpoint | undefined;
+      let overParent: EndpointGroup | undefined;
+      let overIndex = -1;
+  
+      for (const item of newItems) {
+        if (item.id === overId) {
+          overItem = item;
+          overIndex = newItems.indexOf(item);
+          break;
+        }
+        if (item.type === 'group') {
+          const childIndex = item.children.findIndex(c => c.id === overId);
+          if (childIndex !== -1) {
+            overItem = item.children[childIndex];
+            overParent = item;
+            overIndex = childIndex;
+            break;
+          }
+        }
+      }
+  
+      // Insert active item into new position
+      if (overItem?.type === 'group' && overItem.id !== activeId) {
+        // Dropping onto a group
+        (overItem.children as Endpoint[]).unshift(activeItem as Endpoint);
+      } else if (overParent) {
+        // Dropping into a group (next to another endpoint)
+        overParent.children.splice(overIndex, 0, activeItem as Endpoint);
+      } else {
+        // Dropping at the top level
+        if (overIndex !== -1) {
+          newItems.splice(overIndex, 0, activeItem as SortableItem);
+        } else {
+          newItems.push(activeItem as SortableItem);
+        }
+      }
+      
+      persistState(newItems);
+      return newItems;
+    });
   };
 
   const handleCreateGroup = () => {
@@ -468,78 +273,84 @@ const EndpointList: React.FC<EndpointListProps> = ({
         collapsed: false,
         children: []
       };
-
-      const updatedGroups = [...groups, newGroup];
-      setGroups(updatedGroups);
-      
-      if (hasInitializedStateRef.current) {
-        savePreference('endpoint_groups', updatedGroups);
-      }
-
+      const updatedItems = [...items, newGroup];
+      setItems(updatedItems);
+      persistState(updatedItems);
       setNewGroupName('');
       setIsCreateGroupDialogOpen(false);
     }
   };
 
   const handleToggleGroupCollapse = (groupId: string) => {
-    const updatedGroups = groups.map(group => 
-      group.id === groupId 
-        ? { ...group, collapsed: !group.collapsed }
-        : group
-    );
-    setGroups(updatedGroups);
-    
-    if (hasInitializedStateRef.current) {
-      savePreference('endpoint_groups', updatedGroups);
-    }
+    const updatedItems = items.map(item => 
+      item.id === groupId && item.type === 'group'
+        ? { ...item, collapsed: !item.collapsed }
+        : item
+    ) as SortableItem[];
+    setItems(updatedItems);
+    persistState(updatedItems);
   };
 
   const handleRenameGroup = (groupId: string, newName: string) => {
-    const updatedGroups = groups.map(group => 
-      group.id === groupId 
-        ? { ...group, name: newName }
-        : group
-    );
-    setGroups(updatedGroups);
-    
-    if (hasInitializedStateRef.current) {
-      savePreference('endpoint_groups', updatedGroups);
-    }
+    const updatedItems = items.map(item =>
+      item.id === groupId && item.type === 'group'
+        ? { ...item, name: newName }
+        : item
+    ) as SortableItem[];
+    setItems(updatedItems);
+    persistState(updatedItems);
   };
 
   const handleDeleteGroup = (groupId: string) => {
-    // Remove group
-    const updatedGroups = groups.filter(group => group.id !== groupId);
-    setGroups(updatedGroups);
+    const groupToDelete = items.find(item => item.id === groupId && item.type === 'group') as EndpointGroup;
+    if (!groupToDelete) return;
+
+    const updatedItems = items.filter(item => item.id !== groupId);
+    // Move children of deleted group to top level
+    groupToDelete.children.forEach((child: Endpoint) => {
+      updatedItems.push({ ...child, type: 'endpoint' as const });
+    });
     
-    // Remove endpoint-group mappings for this group
-    const updatedGroupMap = new Map(endpointGroupMap);
-    for (const [endpointId, mappedGroupId] of updatedGroupMap.entries()) {
-      if (mappedGroupId === groupId) {
-        updatedGroupMap.delete(endpointId);
-      }
-    }
-    setEndpointGroupMap(updatedGroupMap);
-    
-    if (hasInitializedStateRef.current) {
-      savePreference('endpoint_groups', updatedGroups);
-      savePreference('endpoint_group_map', Object.fromEntries(updatedGroupMap));
-    }
+    setItems(updatedItems);
+    persistState(updatedItems);
   };
 
-  const handleMoveToGroup = (endpointId: string | number, groupId: string) => {
-    const updatedGroupMap = new Map(endpointGroupMap);
-    if (groupId === 'ungrouped') {
-      updatedGroupMap.delete(endpointId);
+  const handleMoveToGroup = (endpointId: string | number, groupId: string | null) => {
+    let endpointToMove: Endpoint | undefined;
+    const updatedItems = [...items];
+
+    // Find and remove the endpoint from its current location
+    for (let i = 0; i < updatedItems.length; i++) {
+      const item = updatedItems[i];
+      if (item.id === endpointId && item.type === 'endpoint') {
+        endpointToMove = item as Endpoint;
+        updatedItems.splice(i, 1);
+        break;
+      }
+      if (item.type === 'group') {
+        const childIndex = item.children.findIndex(c => c.id === endpointId);
+        if (childIndex !== -1) {
+          endpointToMove = item.children[childIndex];
+          item.children.splice(childIndex, 1);
+          break;
+        }
+      }
+    }
+
+    if (!endpointToMove) return;
+
+    // Add the endpoint to the new group or to the top level
+    if (groupId) {
+      const targetGroup = updatedItems.find(item => item.id === groupId && item.type === 'group') as EndpointGroup;
+      if (targetGroup) {
+        targetGroup.children.push(endpointToMove);
+      }
     } else {
-      updatedGroupMap.set(endpointId, groupId);
+      updatedItems.push({ ...endpointToMove, type: 'endpoint' as const });
     }
-    setEndpointGroupMap(updatedGroupMap);
-    
-    if (hasInitializedStateRef.current) {
-      savePreference('endpoint_group_map', Object.fromEntries(updatedGroupMap));
-    }
-    
+
+    setItems(updatedItems);
+    persistState(updatedItems);
     setContextMenu(null);
   };
 
@@ -552,38 +363,33 @@ const EndpointList: React.FC<EndpointListProps> = ({
     });
   };
 
-  const handleCloseContextMenu = () => {
-    setContextMenu(null);
-  };
+  const handleCloseContextMenu = () => setContextMenu(null);
+
+  const allSortableIds = useMemo(() => {
+    const ids: (string | number)[] = [];
+    items.forEach(item => {
+      ids.push(item.id);
+      if (item.type === 'group') {
+        item.children.forEach(child => ids.push(child.id));
+      }
+    });
+    return ids;
+  }, [items]);
 
   if (endpoints.length === 0) {
     return (
       <Box>
         {onAddEndpoint && (
           <Box sx={{ p: 1, borderBottom: 1, borderColor: 'divider' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start' }}>
-              <Tooltip title="Add Monitor">
-                <IconButton 
-                  color="primary" 
-                  onClick={onAddEndpoint}
-                  size="small"
-                  sx={{ 
-                    border: 1, 
-                    borderColor: 'primary.main',
-                    '&:hover': {
-                      backgroundColor: 'primary.main',
-                      color: 'primary.contrastText'
-                    }
-                  }}
-                >
-                  <Add />
-                </IconButton>
-              </Tooltip>
-            </Box>
+            <Tooltip title="Add Monitor">
+              <IconButton color="primary" onClick={onAddEndpoint} size="small">
+                <Add />
+              </IconButton>
+            </Tooltip>
           </Box>
         )}
         <Typography variant="body1" align="center" color="text.secondary" sx={{ mt: 2 }}>
-          No endpoints to monitor. Add one to get started!
+          No endpoints to monitor.
         </Typography>
       </Box>
     );
@@ -591,127 +397,33 @@ const EndpointList: React.FC<EndpointListProps> = ({
 
   return (
     <Box>
-      {/* Controls */}
-      <Box sx={{ p: 1, borderBottom: 1, borderColor: 'divider' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            {onAddEndpoint && (
-              <Tooltip title="Add Monitor">
-                <IconButton 
-                  color="primary" 
-                  onClick={onAddEndpoint}
-                  size="small"
-                  sx={{ 
-                    border: 1, 
-                    borderColor: 'primary.main',
-                    '&:hover': {
-                      backgroundColor: 'primary.main',
-                      color: 'primary.contrastText'
-                    }
-                  }}
-                >
-                  <Add />
-                </IconButton>
-              </Tooltip>
-            )}
-            
-            <Tooltip title="Create Group">
-              <IconButton 
-                color="secondary" 
-                onClick={() => setIsCreateGroupDialogOpen(true)}
-                size="small"
-                sx={{ 
-                  border: 1, 
-                  borderColor: 'secondary.main',
-                  '&:hover': {
-                    backgroundColor: 'secondary.main',
-                    color: 'secondary.contrastText'
-                  }
-                }}
-              >
-                <CreateNewFolder />
-              </IconButton>
-            </Tooltip>
-          </Box>
-
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            {/* View Mode Toggle - only show when no groups exist */}
-            {!hasGroups && (
-              <ButtonGroup size="small" variant="outlined">
-                <Tooltip title="List view">
-                  <Button
-                    startIcon={<ViewList />}
-                    variant={effectiveViewMode === 'list' ? 'contained' : 'outlined'}
-                    onClick={() => handleViewModeChange('list')}
-                  >
-                    List
-                  </Button>
-                </Tooltip>
-                <Tooltip title="Tree view">
-                  <Button
-                    startIcon={<AccountTree />}
-                    variant={effectiveViewMode === 'tree' ? 'contained' : 'outlined'}
-                    onClick={() => handleViewModeChange('tree')}
-                  >
-                    Tree
-                  </Button>
-                </Tooltip>
-              </ButtonGroup>
-            )}
-
-          </Box>
-        </Box>
+      <Box sx={{ p: 1, borderBottom: 1, borderColor: 'divider', display: 'flex', gap: 1 }}>
+        {onAddEndpoint && (
+          <Tooltip title="Add Monitor">
+            <IconButton color="primary" onClick={onAddEndpoint} size="small">
+              <Add />
+            </IconButton>
+          </Tooltip>
+        )}
+        <Tooltip title="Create Group">
+          <IconButton color="secondary" onClick={() => setIsCreateGroupDialogOpen(true)} size="small">
+            <CreateNewFolder />
+          </IconButton>
+        </Tooltip>
       </Box>
 
-      {/* Content */}
-      {effectiveViewMode === 'list' ? (
-        // Flat List View
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragStart={handleDragStart}
-          onDragEnd={handleDragEnd}
-        >
-          <SortableContext
-            items={sortedEndpoints.map(ep => ep.id)}
-            strategy={verticalListSortingStrategy}
-          >
-            <List>
-              {sortedEndpoints.map((endpoint) => (
-                <EndpointListItem
-                  key={endpoint.id}
-                  endpoint={endpoint}
-                  onSelect={onSelect}
-                  isSelected={endpoint.id === selectedId}
-                  onTogglePause={onTogglePause}
-                  isDraggable={true}
-                />
-              ))}
-            </List>
-          </SortableContext>
-        </DndContext>
-      ) : (
-        // Tree View
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragStart={handleDragStart}
-          onDragEnd={handleDragEnd}
-          onDragOver={handleDragOver}
-        >
-          <SortableContext
-            items={[
-              ...groups.map(g => g.id),
-              ...sortedEndpoints.map(ep => ep.id)
-            ]}
-            strategy={verticalListSortingStrategy}
-          >
-            <List>
-              {/* Groups */}
-              {groups.map(group => {
-                const groupEndpoints = groupedEndpoints[group.id] || [];
-                const activeCount = groupEndpoints.filter(ep => !ep.paused).length;
-                
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext items={allSortableIds} strategy={verticalListSortingStrategy}>
+          <List>
+            {items.map(item => {
+              if (item.type === 'group') {
+                const group = item as EndpointGroup;
+                const activeCount = group.children.filter(ep => !ep.paused).length;
                 return (
                   <Box key={group.id}>
                     <GroupingItem
@@ -720,14 +432,13 @@ const EndpointList: React.FC<EndpointListProps> = ({
                       onRename={handleRenameGroup}
                       onDelete={handleDeleteGroup}
                       isDraggable={true}
-                      childrenCount={groupEndpoints.length}
+                      childrenCount={group.children.length}
                       activeEndpointsCount={activeCount}
-                      endpoints={groupEndpoints}
+                      endpoints={group.children}
                     />
-                    
                     {!group.collapsed && (
                       <Box sx={{ ml: 4, mr: 2 }}>
-                        {groupEndpoints.map(endpoint => (
+                        {group.children.map(endpoint => (
                           <EndpointListItem
                             key={endpoint.id}
                             endpoint={endpoint}
@@ -735,31 +446,32 @@ const EndpointList: React.FC<EndpointListProps> = ({
                             isSelected={endpoint.id === selectedId}
                             onTogglePause={onTogglePause}
                             isDraggable={true}
+                            onContextMenu={(e) => handleContextMenu(e, endpoint.id)}
                           />
                         ))}
                       </Box>
                     )}
                   </Box>
                 );
-              })}
+              } else {
+                const endpoint = item as Endpoint;
+                return (
+                  <EndpointListItem
+                    key={endpoint.id}
+                    endpoint={endpoint}
+                    onSelect={onSelect}
+                    isSelected={endpoint.id === selectedId}
+                    onTogglePause={onTogglePause}
+                    isDraggable={true}
+                    onContextMenu={(e) => handleContextMenu(e, endpoint.id)}
+                  />
+                );
+              }
+            })}
+          </List>
+        </SortableContext>
+      </DndContext>
 
-              {/* Ungrouped Endpoints - integrated without separation */}
-              {ungroupedEndpoints.map(endpoint => (
-                <EndpointListItem
-                  key={endpoint.id}
-                  endpoint={endpoint}
-                  onSelect={onSelect}
-                  isSelected={endpoint.id === selectedId}
-                  onTogglePause={onTogglePause}
-                  isDraggable={true}
-                />
-              ))}
-            </List>
-          </SortableContext>
-        </DndContext>
-      )}
-
-      {/* Create Group Dialog */}
       <Dialog open={isCreateGroupDialogOpen} onClose={() => setIsCreateGroupDialogOpen(false)}>
         <DialogTitle>Create New Group</DialogTitle>
         <DialogContent>
@@ -771,11 +483,7 @@ const EndpointList: React.FC<EndpointListProps> = ({
             variant="outlined"
             value={newGroupName}
             onChange={(e) => setNewGroupName(e.target.value)}
-            onKeyPress={(e) => {
-              if (e.key === 'Enter') {
-                handleCreateGroup();
-              }
-            }}
+            onKeyPress={(e) => e.key === 'Enter' && handleCreateGroup()}
           />
         </DialogContent>
         <DialogActions>
@@ -784,25 +492,17 @@ const EndpointList: React.FC<EndpointListProps> = ({
         </DialogActions>
       </Dialog>
 
-      {/* Context Menu */}
       <Menu
         open={contextMenu !== null}
         onClose={handleCloseContextMenu}
         anchorReference="anchorPosition"
-        anchorPosition={
-          contextMenu !== null
-            ? { top: contextMenu.mouseY, left: contextMenu.mouseX }
-            : undefined
-        }
+        anchorPosition={contextMenu ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined}
       >
-        <MenuItem onClick={() => handleMoveToGroup(contextMenu!.endpointId, 'ungrouped')}>
+        <MenuItem onClick={() => handleMoveToGroup(contextMenu!.endpointId, null)}>
           Remove from group
         </MenuItem>
-        {groups.map(group => (
-          <MenuItem 
-            key={group.id}
-            onClick={() => handleMoveToGroup(contextMenu!.endpointId, group.id)}
-          >
+        {items.filter(item => item.type === 'group').map(group => (
+          <MenuItem key={group.id} onClick={() => handleMoveToGroup(contextMenu!.endpointId, group.id)}>
             Move to "{group.name}"
           </MenuItem>
         ))}

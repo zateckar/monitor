@@ -1,4 +1,3 @@
-import tls from 'tls';
 import { LoggerService } from './logger';
 
 export interface CertificateResult {
@@ -34,6 +33,11 @@ export interface CertificateError {
   code?: string;
 }
 
+interface ConnectionData {
+  hostname: string;
+  port: number;
+}
+
 export class CertificateService {
   constructor(private logger: LoggerService) {}
 
@@ -51,30 +55,24 @@ export class CertificateService {
         await this.logger.debug(`Certificate check skipped - ${error.error}: ${error.details}`, 'CERTIFICATE');
         return { success: false, error };
       }
-
+      await this.logger.debug(`Starting certificate check for ${url}`, 'CERTIFICATE');
       const hostname = parsedUrl.hostname;
       const port = parsedUrl.port ? parseInt(parsedUrl.port) : 443;
 
-      await this.logger.debug(`Starting certificate check for ${hostname}:${port}`, 'CERTIFICATE');
-
-      // Get certificate info using simplified approach
-      const certificateInfo = await this.getCertificateInfo(hostname, port);
+      // Get certificate info using Bun.connect()
+      const certificateInfo = await this.getCertificateWithBunConnect(hostname, port);
       
       const now = new Date();
-      const validFrom = new Date(certificateInfo.valid_from);
-      const validTo = new Date(certificateInfo.valid_to);
+      const validFrom = new Date(certificateInfo.validFrom);
+      const validTo = new Date(certificateInfo.validTo);
       const daysRemaining = Math.ceil((validTo.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-
-      // Extract issuer and subject info safely
-      const issuer = (certificateInfo.issuer && (certificateInfo.issuer.CN || certificateInfo.issuer.O)) || 'Unknown';
-      const subject = (certificateInfo.subject && (certificateInfo.subject.CN || certificateInfo.subject.O)) || hostname;
 
       const result: CertificateResult = {
         daysRemaining,
         validFrom,
         validTo,
-        issuer,
-        subject
+        issuer: certificateInfo.issuer,
+        subject: certificateInfo.subject
       };
 
       await this.logger.debug(`Certificate check successful for ${hostname}:${port} - expires in ${daysRemaining} days`, 'CERTIFICATE');
@@ -125,10 +123,46 @@ export class CertificateService {
 
       await this.logger.debug(`Starting certificate chain check for ${hostname}:${port}`, 'CERTIFICATE');
 
-      const certificateChain = await this.getCertificateChainInfo(hostname, port);
+      // Get certificate info using Bun.connect()
+      const certificateInfo = await this.getCertificateWithBunConnect(hostname, port);
       
-      await this.logger.debug(`Certificate chain check successful for ${hostname}:${port} - found ${certificateChain.certificates.length} certificates`, 'CERTIFICATE');
-      return { success: true, result: certificateChain };
+      const now = new Date();
+      const validFrom = new Date(certificateInfo.validFrom);
+      const validTo = new Date(certificateInfo.validTo);
+      const daysRemaining = Math.ceil((validTo.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+
+      const certificateEntry: CertificateInfo = {
+        subject: certificateInfo.subject,
+        issuer: certificateInfo.issuer,
+        validFrom,
+        validTo,
+        daysRemaining,
+        serialNumber: certificateInfo.serialNumber || 'Unknown',
+        fingerprint: certificateInfo.fingerprint || 'Unknown',
+        subjectAltNames: certificateInfo.subjectAltNames,
+        keyUsage: undefined,
+        extKeyUsage: undefined
+      };
+
+      // Determine if the chain is valid
+      const isValid = daysRemaining > 0;
+      const errors: string[] = [];
+
+      if (daysRemaining <= 0) {
+        errors.push('Certificate has expired');
+      }
+      if (daysRemaining <= 30) {
+        errors.push('Certificate expires within 30 days');
+      }
+
+      const result: CertificateChain = {
+        certificates: [certificateEntry],
+        isValid,
+        errors: errors.length > 0 ? errors : undefined
+      };
+      
+      await this.logger.debug(`Certificate chain check successful for ${hostname}:${port} - found 1 certificate`, 'CERTIFICATE');
+      return { success: true, result };
 
     } catch (error) {
       let errorMessage = 'Unknown error';
@@ -156,144 +190,140 @@ export class CertificateService {
   }
 
   /**
-   * Get the full certificate chain information for a hostname
+   * Get certificate information using Bun.connect() with TLS
+   * Based on the proven approach from test-certificate.ts
    */
-  private getCertificateChainInfo(hostname: string, port: number = 443): Promise<CertificateChain> {
+  private async getCertificateWithBunConnect(hostname: string, port: number = 443): Promise<{
+    subject: string;
+    issuer: string;
+    validFrom: string;
+    validTo: string;
+    serialNumber?: string;
+    fingerprint?: string;
+    subjectAltNames?: string[];
+  }> {
+    await this.logger.debug(`Connecting to ${hostname}:${port} using Bun.connect()`, 'CERTIFICATE');
+    
+    const logger = this.logger; // Capture logger reference for use in socket handlers
+    
     return new Promise((resolve, reject) => {
-      const options = {
-        host: hostname,
+      let resolved = false;
+      
+      // Set timeout for the connection
+      const timeout = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          reject(new Error(`Connection timeout after 10 seconds for ${hostname}:${port}`));
+        }
+      }, 10000);
+
+      Bun.connect({
+        hostname: hostname,
         port: port,
-        servername: hostname,
-        rejectUnauthorized: false, // Don't reject self-signed certs, we want to examine them
-      };
-
-      const socket = tls.connect(options, () => {
-        try {
-          const peerCert = socket.getPeerCertificate(true); // true = include issuer chain
-          socket.end();
-
-          if (!peerCert || Object.keys(peerCert).length === 0) {
-            return reject(new Error(`No certificate found for ${hostname}`));
-          }
-
-          const certificates: CertificateInfo[] = [];
-          const now = new Date();
-
-          // Process the certificate chain
-          let currentCert = peerCert;
-          while (currentCert) {
-            const validFrom = new Date(currentCert.valid_from);
-            const validTo = new Date(currentCert.valid_to);
-            const daysRemaining = Math.ceil((validTo.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-
-            // Extract subject and issuer information
-            const subjectCN = currentCert.subject?.CN || 'Unknown';
-            const subjectO = currentCert.subject?.O || '';
-            const issuerCN = currentCert.issuer?.CN || 'Unknown';
-            const issuerO = currentCert.issuer?.O || '';
-
-            const subjectStr = subjectO ? `${subjectCN} (${subjectO})` : subjectCN;
-            const issuerStr = issuerO ? `${issuerCN} (${issuerO})` : issuerCN;
-
-            // Extract Subject Alternative Names
-            const subjectAltNames: string[] = [];
-            if (currentCert.subjectaltname) {
-              const altNames = currentCert.subjectaltname.split(', ');
-              altNames.forEach(name => {
-                if (name.startsWith('DNS:')) {
-                  subjectAltNames.push(name.substring(4));
-                } else if (name.startsWith('IP Address:')) {
-                  subjectAltNames.push(name.substring(11));
-                }
-              });
-            }
-
-            // Extract key usage extensions
-            const keyUsage: string[] = [];
-            const extKeyUsage: string[] = [];
+        
+        // Enable TLS
+        tls: {
+          rejectUnauthorized: false, // Allow self-signed certificates for monitoring
+          serverName: hostname
+        },
+        
+        socket: {
+          data: { hostname, port } as ConnectionData,
+          
+          // Handle successful connection
+          open(socket: any) {
+            if (resolved) return;
             
-            if (currentCert.ext_key_usage) {
-              extKeyUsage.push(...currentCert.ext_key_usage);
+            try {
+              logger.debug(`TLS connection established for ${hostname}:${port}`, 'CERTIFICATE');
+              
+              // Extract certificate information using Bun's native TLS socket
+              if (typeof socket.getPeerCertificate === 'function') {
+                try {
+                  const certificate = socket.getPeerCertificate();
+                  
+                  if (!certificate || Object.keys(certificate).length === 0) {
+                    clearTimeout(timeout);
+                    resolved = true;
+                    socket.end();
+                    reject(new Error(`No certificate received from ${hostname}:${port}`));
+                    return;
+                  }
+
+                  const subject = certificate.subject?.CN || certificate.subject?.O || hostname;
+                  const issuer = certificate.issuer?.CN || certificate.issuer?.O || 'Unknown';
+                  
+                  // Extract subject alternative names
+                  let subjectAltNames: string[] | undefined;
+                  if (certificate.subjectaltname) {
+                    subjectAltNames = certificate.subjectaltname.split(', ')
+                      .filter((name: string) => name.startsWith('DNS:'))
+                      .map((name: string) => name.substring(4));
+                  }
+
+                  const certInfo = {
+                    subject,
+                    issuer,
+                    validFrom: certificate.valid_from,
+                    validTo: certificate.valid_to,
+                    serialNumber: certificate.serialNumber,
+                    fingerprint: certificate.fingerprint || certificate.fingerprint256,
+                    subjectAltNames
+                  };
+
+                  logger.debug(`Certificate extracted for ${hostname}: ${subject} (expires: ${certificate.valid_to})`, 'CERTIFICATE');
+                  
+                  clearTimeout(timeout);
+                  resolved = true;
+                  socket.end();
+                  resolve(certInfo);
+                  
+                } catch (certError) {
+                  clearTimeout(timeout);
+                  resolved = true;
+                  socket.end();
+                  reject(new Error(`Failed to extract certificate from ${hostname}:${port}: ${certError}`));
+                }
+              } else {
+                clearTimeout(timeout);
+                resolved = true;
+                socket.end();
+                reject(new Error(`getPeerCertificate method not available for ${hostname}:${port}`));
+              }
+            } catch (openError) {
+              clearTimeout(timeout);
+              resolved = true;
+              socket.end?.();
+              reject(new Error(`Error in connection open handler for ${hostname}:${port}: ${openError}`));
             }
-
-            certificates.push({
-              subject: subjectStr,
-              issuer: issuerStr,
-              validFrom,
-              validTo,
-              daysRemaining,
-              serialNumber: currentCert.serialNumber || 'Unknown',
-              fingerprint: currentCert.fingerprint || 'Unknown',
-              subjectAltNames: subjectAltNames.length > 0 ? subjectAltNames : undefined,
-              keyUsage: keyUsage.length > 0 ? keyUsage : undefined,
-              extKeyUsage: extKeyUsage.length > 0 ? extKeyUsage : undefined
-            });
-
-            // Move to the next certificate in the chain
-            if (currentCert.issuerCertificate && currentCert.issuerCertificate !== currentCert) {
-              currentCert = currentCert.issuerCertificate;
-            } else {
-              break;
+          },
+          
+          // Handle connection errors
+          error(socket: any, error: Error) {
+            if (!resolved) {
+              clearTimeout(timeout);
+              resolved = true;
+              reject(new Error(`Connection error for ${hostname}:${port}: ${error.message}`));
             }
+          },
+          
+          // Handle connection close
+          close(socket: any) {
+            // Connection closed - this is expected after we extract the certificate
+          },
+          
+          // Handle incoming data (minimal for certificate testing)
+          data(socket: any, receivedData: Buffer) {
+            // We don't need to process data for certificate extraction
           }
-
-          // Determine if the chain is valid (simplified check)
-          const isValid = certificates.length > 0 && (certificates[0]?.daysRemaining || 0) > 0;
-          const errors: string[] = [];
-
-          const firstCert = certificates[0];
-          if (firstCert && firstCert.daysRemaining <= 0) {
-            errors.push('Certificate has expired');
-          }
-          if (firstCert && firstCert.daysRemaining <= 30) {
-            errors.push('Certificate expires within 30 days');
-          }
-
-          resolve({
-            certificates,
-            isValid,
-            errors: errors.length > 0 ? errors : undefined
-          });
-
-        } catch (error) {
-          reject(error);
+        }
+      } as any).catch((connectError: Error) => {
+        if (!resolved) {
+          clearTimeout(timeout);
+          resolved = true;
+          reject(new Error(`Failed to connect to ${hostname}:${port}: ${connectError.message}`));
         }
       });
-
-      socket.on('error', reject);
     });
   }
-
-  /**
-   * Get certificate information for a hostname (simplified approach based on certwatch-js)
-   */
-  private getCertificateInfo(hostname: string, port: number = 443): Promise<any> {
-    return new Promise((resolve, reject) => {
-      const options = {
-        host: hostname,
-        port: port,
-        servername: hostname,
-        rejectUnauthorized: false, // Don't reject self-signed certs, we just want expiry info
-      };
-
-      const socket = tls.connect(options, () => {
-        const cert = socket.getPeerCertificate();
-        socket.end();
-
-        if (!cert || Object.keys(cert).length === 0) {
-          return reject(new Error(`No certificate found for ${hostname}`));
-        }
-
-        resolve({
-          subject: cert.subject,
-          issuer: cert.issuer,
-          valid_from: cert.valid_from,
-          valid_to: cert.valid_to,
-        });
-      });
-
-      socket.on('error', reject);
-    });
-  }
-
 }

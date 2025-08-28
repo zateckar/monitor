@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea } from 'recharts';
 import { formatChartTime } from '../utils/timezone';
 
 interface ThemeSettings {
@@ -145,6 +145,13 @@ const EndpointChart = ({ endpointId, timeRange }: EndpointChartProps) => {
   
   // Detect gaps
   const monitoringGaps = endpoint ? detectGaps(data, endpoint.heartbeat_interval || 60) : [];
+
+  // Transform gaps to use numerical timestamps for ReferenceArea
+  const transformedGaps = monitoringGaps.map(gap => ({
+    ...gap,
+    startTimestamp: new Date(gap.start).getTime(),
+    endTimestamp: new Date(gap.end).getTime()
+  }));
 
   // Create chart data - simple approach using connectNulls=false
   const createChartData = (originalData: ResponseTime[], gaps: Array<{start: string, end: string}>) => {
@@ -350,6 +357,18 @@ const EndpointChart = ({ endpointId, timeRange }: EndpointChartProps) => {
             tick={{ fill: themeSettings.mode === 'dark' ? '#9ca3af' : '#6b7280', fontSize: 10  }}
           />
           <Tooltip content={<LinearTimeTooltip />} />
+          
+          {/* Render red bars for DOWN periods (monitoring gaps) */}
+          {transformedGaps.map((gap, index) => (
+            <ReferenceArea
+              key={`gap-${index}`}
+              x1={gap.startTimestamp}
+              x2={gap.endTimestamp}
+              fill={themeSettings.errorColor}
+              fillOpacity={0.3}
+              stroke="none"
+            />
+          ))}
           
           {/* Render areas only for aggregated data to create the band effect */}
           {hasAggregatedData && (

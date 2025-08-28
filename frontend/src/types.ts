@@ -145,28 +145,41 @@ export interface CertificateChain {
   errors?: string[];
 }
 
+export interface DomainInfo {
+  creationDate: string | null;
+  updatedDate: string | null;
+  expiryDate: string | null;
+  daysRemaining: number | null;
+}
+
+export interface DnsInfo {
+  A: string[];
+  CNAME: string | null;
+  TXT: string[];
+  MX: Array<{ exchange: string; priority: number }>;
+  NS: string[];
+  SOA: any | null;
+}
+
+export interface ServerInfo {
+  serverHeader: string | undefined;
+  httpStatus: number | undefined;
+}
+
+export interface EnhancedDomainInfo {
+  domain: DomainInfo;
+  certificate: any | null; // CertificateResult from backend
+  dns: DnsInfo | null;
+  server: ServerInfo | null;
+}
+
 // Tree structure types for endpoint grouping
 export interface EndpointGroup {
   id: string;
   name: string;
   type: 'group';
   collapsed: boolean;
-  children: (Endpoint | EndpointGroup)[];
+  children: Endpoint[];
 }
 
-export interface TreeNode {
-  id: string | number;
-  name: string;
-  type: 'endpoint' | 'group';
-  parentId?: string;
-  children?: TreeNode[];
-  collapsed?: boolean;
-  // Include all endpoint properties for endpoint nodes
-  endpoint?: Endpoint;
-}
-
-export interface EndpointTreeStructure {
-  nodes: TreeNode[];
-  groups: EndpointGroup[];
-  ungroupedEndpoints: Endpoint[];
-}
+export type SortableItem = (Endpoint & { type: 'endpoint' }) | EndpointGroup;

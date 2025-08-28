@@ -22,6 +22,13 @@ import {
   DialogActions
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
+import NetworkCheckIcon from '@mui/icons-material/NetworkCheck';
+import HttpIcon from '@mui/icons-material/Http';
+import DnsIcon from '@mui/icons-material/Dns';
+import AccessTimeIcon from '@mui/icons-material/AccessTime';
+import ErrorIcon from '@mui/icons-material/Error';
+import SecurityIcon from '@mui/icons-material/Security';
+import StorageIcon from '@mui/icons-material/Storage';
 import type { Outage } from '../types';
 import { formatDateTime } from '../utils/timezone';
 
@@ -79,6 +86,52 @@ const OutageHistory: React.FC<OutageHistoryProps> = ({ endpointId }) => {
     }
   };
 
+
+  const getFailureIcon = (reason: string) => {
+    const iconProps = { fontSize: 'small' as const };
+    
+    if (reason.toLowerCase().includes('dns')) {
+      return <DnsIcon {...iconProps} />;
+    }
+    if (reason.toLowerCase().includes('timeout')) {
+      return <AccessTimeIcon {...iconProps} />;
+    }
+    if (reason.toLowerCase().includes('http') || reason.toLowerCase().includes('status')) {
+      return <HttpIcon {...iconProps} />;
+    }
+    if (reason.toLowerCase().includes('ssl') || reason.toLowerCase().includes('tls') || reason.toLowerCase().includes('certificate')) {
+      return <SecurityIcon {...iconProps} />;
+    }
+    if (reason.toLowerCase().includes('connection')) {
+      return <NetworkCheckIcon {...iconProps} />;
+    }
+    if (reason.toLowerCase().includes('kafka') || reason.toLowerCase().includes('broker') || reason.toLowerCase().includes('topic')) {
+      return <StorageIcon {...iconProps} />;
+    }
+    return <ErrorIcon {...iconProps} />;
+  };
+
+  const getFailureColor = (reason: string) => {
+    if (reason.toLowerCase().includes('dns')) {
+      return '#ff9800'; // orange
+    }
+    if (reason.toLowerCase().includes('timeout')) {
+      return '#ff5722'; // deep orange
+    }
+    if (reason.toLowerCase().includes('http') || reason.toLowerCase().includes('status')) {
+      return '#2196f3'; // blue
+    }
+    if (reason.toLowerCase().includes('ssl') || reason.toLowerCase().includes('tls') || reason.toLowerCase().includes('certificate')) {
+      return '#9c27b0'; // purple
+    }
+    if (reason.toLowerCase().includes('connection')) {
+      return '#f44336'; // red
+    }
+    if (reason.toLowerCase().includes('kafka') || reason.toLowerCase().includes('broker') || reason.toLowerCase().includes('topic')) {
+      return '#607d8b'; // blue grey
+    }
+    return '#757575'; // grey
+  };
 
   const getStatusChip = (outage: Outage) => {
     if (outage.ended_at === null) {
@@ -164,9 +217,18 @@ const OutageHistory: React.FC<OutageHistoryProps> = ({ endpointId }) => {
                       </Typography>
                     </TableCell>
                     <TableCell>
-                      <Typography variant="body2">
-                        {outage.reason}
-                      </Typography>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        {getFailureIcon(outage.reason)}
+                        <Typography 
+                          variant="body2"
+                          sx={{ 
+                            fontFamily: 'monospace',
+                            color: getFailureColor(outage.reason)
+                          }}
+                        >
+                          {outage.reason}
+                        </Typography>
+                      </Box>
                     </TableCell>
                   </TableRow>
                 ))}

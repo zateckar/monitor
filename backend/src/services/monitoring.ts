@@ -4,6 +4,7 @@ import { Database } from 'bun:sqlite';
 import type { Endpoint } from '../types';
 import { LoggerService } from './logger';
 import { KafkaService } from './kafka';
+import { DomainInfoService } from './domain-info';
 import { CertificateService } from './certificate';
 import { DEFAULT_CERT_CHECK_INTERVAL } from '../config/constants';
 
@@ -27,6 +28,7 @@ export class MonitoringService {
     private db: Database, 
     private logger: LoggerService, 
     private kafkaService: KafkaService,
+    private domainInfoService: DomainInfoService,
     private certificateService: CertificateService,
     private sendNotification: (endpoint: Endpoint, status: string) => Promise<void>
   ) {}
@@ -123,7 +125,7 @@ export class MonitoringService {
   }
 
   // Perform HTTP check using Bun's fetch
-  private async checkHttp(endpoint: Endpoint): Promise<{ isOk: boolean; responseTime: number }> {
+  private async checkHttp(endpoint: Endpoint): Promise<{ isOk: boolean; responseTime: number; failureReason?: string }> {
     const startTime = Date.now();
     
     try {
@@ -136,41 +138,51 @@ export class MonitoringService {
       const statusOk = this.isStatusOk(response.status, endpoint);
       
       if (!statusOk) {
+        const reason = `HTTP ${response.status} ${response.statusText}`;
         await this.logger.debug(`HTTP status check failed for ${endpoint.url}: ${response.status}`, 'MONITORING');
-        return { isOk: false, responseTime };
+        return { isOk: false, responseTime, failureReason: reason };
       }
 
       // Check keyword if specified
       const keywordOk = await this.checkKeyword(response, endpoint.keyword_search);
       
       if (!keywordOk) {
+        const reason = `Required keyword "${endpoint.keyword_search}" not found in response`;
         await this.logger.debug(`Keyword search failed for ${endpoint.url}: "${endpoint.keyword_search}" not found`, 'MONITORING');
-        return { isOk: false, responseTime };
+        return { isOk: false, responseTime, failureReason: reason };
       }
 
       return { isOk: true, responseTime };
 
     } catch (error) {
       const responseTime = Date.now() - startTime;
+      const reason = this.categorizeError(error, 'http');
       await this.logger.debug(`HTTP request failed for ${endpoint.url}: ${error}`, 'MONITORING');
-      return { isOk: false, responseTime };
+      return { isOk: false, responseTime, failureReason: reason };
     }
   }
 
   // Perform ping check
-  private async checkPing(endpoint: Endpoint): Promise<{ isOk: boolean; responseTime: number }> {
+  private async checkPing(endpoint: Endpoint): Promise<{ isOk: boolean; responseTime: number; failureReason?: string }> {
     try {
       const result = await ping.promise.probe(endpoint.url, { timeout: 10 });
       const responseTime = result.time === 'unknown' ? 0 : result.time;
-      return { isOk: result.alive, responseTime };
+      
+      if (!result.alive) {
+        const reason = 'Host not responding to ping';
+        return { isOk: false, responseTime, failureReason: reason };
+      }
+      
+      return { isOk: true, responseTime };
     } catch (error) {
+      const reason = this.categorizeError(error, 'ping');
       await this.logger.debug(`Ping failed for ${endpoint.url}: ${error}`, 'MONITORING');
-      return { isOk: false, responseTime: 0 };
+      return { isOk: false, responseTime: 0, failureReason: reason };
     }
   }
 
   // Perform TCP port check
-  private async checkTcp(endpoint: Endpoint): Promise<{ isOk: boolean; responseTime: number }> {
+  private async checkTcp(endpoint: Endpoint): Promise<{ isOk: boolean; responseTime: number; failureReason?: string }> {
     const startTime = Date.now();
     
     return new Promise((resolve) => {
@@ -185,12 +197,14 @@ export class MonitoringService {
       
       socket.on('timeout', () => {
         socket.destroy();
-        resolve({ isOk: false, responseTime: Date.now() - startTime });
+        const reason = 'Connection timeout';
+        resolve({ isOk: false, responseTime: Date.now() - startTime, failureReason: reason });
       });
       
-      socket.on('error', () => {
+      socket.on('error', (error) => {
         socket.destroy();
-        resolve({ isOk: false, responseTime: Date.now() - startTime });
+        const reason = this.categorizeError(error, 'tcp');
+        resolve({ isOk: false, responseTime: Date.now() - startTime, failureReason: reason });
       });
       
       socket.connect(endpoint.tcp_port!, endpoint.url);
@@ -198,7 +212,7 @@ export class MonitoringService {
   }
 
   // Perform Kafka check
-  private async checkKafka(endpoint: Endpoint): Promise<{ isOk: boolean; responseTime: number }> {
+  private async checkKafka(endpoint: Endpoint): Promise<{ isOk: boolean; responseTime: number; failureReason?: string }> {
     await this.logger.debug(`[Kafka-${endpoint.name}] Performing health check using persistent connection`, 'KAFKA');
     
     try {
@@ -206,15 +220,107 @@ export class MonitoringService {
       
       if (healthResult.isOk) {
         await this.logger.debug(`[Kafka-${endpoint.name}] Health check passed in ${healthResult.responseTime}ms`, 'KAFKA');
+        return { isOk: true, responseTime: healthResult.responseTime };
       } else {
         await this.logger.warn(`[Kafka-${endpoint.name}] Health check failed in ${healthResult.responseTime}ms`, 'KAFKA');
+        const reason = 'Kafka health check failed';
+        return { isOk: false, responseTime: healthResult.responseTime, failureReason: reason };
       }
-      
-      return healthResult;
     } catch (error) {
       await this.logger.error(`[Kafka-${endpoint.name}] Health check error: ${error}`, 'KAFKA');
-      throw error;
+      const reason = this.categorizeError(error, endpoint.type);
+      return { isOk: false, responseTime: 0, failureReason: reason };
     }
+  }
+
+  // Function to categorize errors into user-friendly failure reasons
+  private categorizeError(error: any, endpointType: string): string {
+    const errorMessage = error?.message || error?.toString() || 'Unknown error';
+    
+    // Network and connectivity errors
+    if (errorMessage.includes('ENOTFOUND') || errorMessage.includes('getaddrinfo')) {
+      return 'DNS resolution failed';
+    }
+    if (errorMessage.includes('ECONNREFUSED')) {
+      return 'Connection refused';
+    }
+    if (errorMessage.includes('ECONNRESET')) {
+      return 'Connection reset';
+    }
+    if (errorMessage.includes('ETIMEDOUT') || errorMessage.includes('timeout')) {
+      return 'Connection timeout';
+    }
+    if (errorMessage.includes('ECONNABORTED')) {
+      return 'Connection aborted';
+    }
+    if (errorMessage.includes('EHOSTUNREACH')) {
+      return 'Host unreachable';
+    }
+    if (errorMessage.includes('ENETUNREACH')) {
+      return 'Network unreachable';
+    }
+    
+    // HTTP specific errors
+    if (endpointType === 'http') {
+      if (errorMessage.includes('certificate')) {
+        return 'SSL/TLS certificate error';
+      }
+      if (errorMessage.includes('status code')) {
+        const statusMatch = errorMessage.match(/status code (\d+)/i);
+        if (statusMatch) {
+          const statusCode = parseInt(statusMatch[1]);
+          if (statusCode >= 400 && statusCode < 500) {
+            return `HTTP ${statusCode} client error`;
+          }
+          if (statusCode >= 500) {
+            return `HTTP ${statusCode} server error`;
+          }
+        }
+      }
+      if (errorMessage.includes('keyword') && errorMessage.includes('not found')) {
+        return 'Required keyword not found in response';
+      }
+    }
+    
+    // Kafka specific errors
+    if (endpointType.startsWith('kafka')) {
+      if (errorMessage.includes('SASL') || errorMessage.includes('authentication')) {
+        return 'Kafka authentication failed';
+      }
+      if (errorMessage.includes('topic') && errorMessage.includes('not found')) {
+        return 'Kafka topic not found';
+      }
+      if (errorMessage.includes('broker')) {
+        return 'Kafka broker connection failed';
+      }
+    }
+    
+    // TCP specific errors
+    if (endpointType === 'tcp') {
+      if (errorMessage.includes('port')) {
+        return 'TCP port unreachable';
+      }
+    }
+    
+    // Ping specific errors
+    if (endpointType === 'ping') {
+      if (errorMessage.includes('packet loss') || errorMessage.includes('100% packet loss')) {
+        return 'Ping packet loss';
+      }
+      if (!errorMessage.includes('alive')) {
+        return 'Host not responding to ping';
+      }
+    }
+    
+    // Generic fallbacks
+    if (errorMessage.includes('AbortError')) {
+      return 'Request timeout';
+    }
+    
+    // If we can't categorize it, return a sanitized version of the original error
+    return errorMessage.length > 100 ? 
+      errorMessage.substring(0, 100) + '...' : 
+      errorMessage;
   }
 
   // Function to check a single endpoint
@@ -228,6 +334,7 @@ export class MonitoringService {
     const startTime = Date.now();
     let isOk = false;
     let responseTime = 0;
+    let failureReason: string | null = null;
 
     try {
       // Perform the appropriate check based on endpoint type
@@ -236,18 +343,21 @@ export class MonitoringService {
           const httpResult = await this.checkHttp(endpoint);
           isOk = httpResult.isOk;
           responseTime = httpResult.responseTime;
+          failureReason = httpResult.failureReason || null;
           break;
 
         case 'ping':
           const pingResult = await this.checkPing(endpoint);
           isOk = pingResult.isOk;
           responseTime = pingResult.responseTime;
+          failureReason = pingResult.failureReason || null;
           break;
 
         case 'tcp':
           const tcpResult = await this.checkTcp(endpoint);
           isOk = tcpResult.isOk;
           responseTime = tcpResult.responseTime;
+          failureReason = tcpResult.failureReason || null;
           break;
 
         case 'kafka_producer':
@@ -255,6 +365,7 @@ export class MonitoringService {
           const kafkaResult = await this.checkKafka(endpoint);
           isOk = kafkaResult.isOk;
           responseTime = kafkaResult.responseTime;
+          failureReason = kafkaResult.failureReason || null;
           break;
 
         default:
@@ -275,13 +386,16 @@ export class MonitoringService {
         }
         
         this.db.run('UPDATE endpoints SET status = ?, failed_attempts = 0, last_checked = CURRENT_TIMESTAMP WHERE id = ?', ['UP', endpoint.id]);
-        this.db.run('INSERT INTO response_times (endpoint_id, response_time, status) VALUES (?, ?, ?)', [endpoint.id, responseTime, 'UP']);
+        this.db.run('INSERT INTO response_times (endpoint_id, response_time, status, failure_reason) VALUES (?, ?, ?, ?)', [endpoint.id, responseTime, 'UP', null]);
       } else {
-        throw new Error('Check failed');
+        throw new Error(failureReason || 'Check failed');
       }
     } catch (error) {
       responseTime = responseTime || (Date.now() - startTime);
       const newFailedAttempts = (endpoint.failed_attempts || 0) + 1;
+      
+      // Categorize the error for user-friendly display
+      const categorizedReason = this.categorizeError(error, endpoint.type);
       
       if (newFailedAttempts >= (endpoint.retries || 3)) {
         if (endpoint.status !== 'DOWN') {
@@ -295,7 +409,7 @@ export class MonitoringService {
         await this.logger.warn(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) check failed (attempt ${newFailedAttempts}/${endpoint.retries}). Error: ${error}`, 'MONITORING');
         this.db.run('UPDATE endpoints SET failed_attempts = ?, last_checked = CURRENT_TIMESTAMP WHERE id = ?', [newFailedAttempts, endpoint.id]);
       }
-      this.db.run('INSERT INTO response_times (endpoint_id, response_time, status) VALUES (?, ?, ?)', [endpoint.id, responseTime, 'DOWN']);
+      this.db.run('INSERT INTO response_times (endpoint_id, response_time, status, failure_reason) VALUES (?, ?, ?, ?)', [endpoint.id, responseTime, 'DOWN', categorizedReason]);
     }
   }
 
@@ -347,6 +461,61 @@ export class MonitoringService {
     }
   }
 
+  // Function to check domain information for a single endpoint
+  async checkDomainInfo(endpoint: Endpoint): Promise<void> {
+    // Skip if endpoint is paused or not HTTP type
+    if (endpoint.paused || endpoint.type !== 'http') {
+      return;
+    }
+
+    try {
+      await this.logger.debug(`Checking domain info for ${endpoint.url}`, 'DOMAIN');
+      const domainResult = await this.domainInfoService.getDomainInfo(endpoint.url);
+      
+      if (domainResult.success) {
+        const domainInfo = domainResult.result;
+        
+        await this.logger.debug(`Domain info check successful for ${endpoint.url}`, 'DOMAIN');
+        
+        // Update domain information in database
+        this.db.run(
+          'UPDATE endpoints SET domain_expires_in = ?, domain_expiry_date = ?, domain_creation_date = ?, domain_updated_date = ? WHERE id = ?',
+          [
+            domainInfo.daysRemaining,
+            domainInfo.expiryDate ? domainInfo.expiryDate.toISOString() : null,
+            domainInfo.creationDate ? domainInfo.creationDate.toISOString() : null,
+            domainInfo.updatedDate ? domainInfo.updatedDate.toISOString() : null,
+            endpoint.id
+          ]
+        );
+        
+        // Optional: Send notification for domain expiry (similar to certificate)
+        if (domainInfo.daysRemaining !== null && domainInfo.daysRemaining <= 30) {
+          await this.logger.warn(`Domain expiring soon for ${endpoint.url} - ${domainInfo.daysRemaining} days remaining`, 'DOMAIN');
+          // Uncomment the line below if you want domain expiry notifications
+          // await this.sendNotification(endpoint, `Domain for ${endpoint.url} is expiring in ${domainInfo.daysRemaining} days.`);
+        }
+      } else {
+        // Log the specific error details for debugging
+        await this.logger.warn(`Domain info check failed for ${endpoint.url}: ${domainResult.error.error} - ${domainResult.error.details}`, 'DOMAIN');
+        
+        // Clear domain information on failure
+        this.db.run(
+          'UPDATE endpoints SET domain_expires_in = NULL, domain_expiry_date = NULL, domain_creation_date = NULL, domain_updated_date = NULL WHERE id = ?',
+          [endpoint.id]
+        );
+      }
+    } catch (err) {
+      await this.logger.error(`Unexpected error during domain info check for ${endpoint.url}: ${err}`, 'DOMAIN');
+      
+      // Clear domain information on error
+      this.db.run(
+        'UPDATE endpoints SET domain_expires_in = NULL, domain_expiry_date = NULL, domain_creation_date = NULL, domain_updated_date = NULL WHERE id = ?',
+        [endpoint.id]
+      );
+    }
+  }
+
   // Function to start certificate monitoring for a single endpoint
   startCertificateMonitoring(endpoint: Endpoint): void {
     // Clear existing certificate timer if any
@@ -354,8 +523,8 @@ export class MonitoringService {
       clearTimeout(this.certificateTimers.get(endpoint.id)!);
     }
 
-    // Don't start certificate monitoring if endpoint is paused, not HTTP, or certificate checking is disabled
-    if (endpoint.paused || endpoint.type !== 'http' || !endpoint.check_cert_expiry) {
+    // Don't start certificate monitoring if endpoint is paused or not HTTP
+    if (endpoint.paused || endpoint.type !== 'http') {
       return;
     }
 
@@ -374,15 +543,21 @@ export class MonitoringService {
           const isPaused = Boolean(currentEndpoint?.paused);
           const isCertCheckEnabled = Boolean(currentEndpoint?.check_cert_expiry);
           
-          if (!isPaused && isCertCheckEnabled) {
-            await boundCertCheck(endpoint);
+          if (!isPaused) {
+            // Always check domain info for HTTP endpoints
+            await this.checkDomainInfo(endpoint);
+            
+            // Only check certificate if enabled
+            if (isCertCheckEnabled) {
+              await boundCertCheck(endpoint);
+            }
           } else {
-            await this.logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) certificate monitoring stopped - endpoint paused: ${isPaused}, cert checking enabled: ${isCertCheckEnabled}`, 'CERTIFICATE');
+            await this.logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) certificate monitoring stopped - endpoint paused: ${isPaused}`, 'CERTIFICATE');
             this.stopCertificateMonitoring(endpoint.id);
             return;
           }
         } catch (err) {
-          await this.logger.error(`Error checking certificate for endpoint ${endpoint.id} (${endpoint.name}): ${err}`, 'CERTIFICATE');
+          await this.logger.error(`Error checking certificate/domain for endpoint ${endpoint.id} (${endpoint.name}): ${err}`, 'CERTIFICATE');
         }
         scheduleCertCheck();
       }, intervalSeconds * 1000);
@@ -398,15 +573,23 @@ export class MonitoringService {
         const isPaused = Boolean(currentEndpoint?.paused);
         const isCertCheckEnabled = Boolean(currentEndpoint?.check_cert_expiry);
         
-        if (!isPaused && isCertCheckEnabled) {
-          await boundCertCheck(endpoint);
-          await this.logger.info(`Started certificate monitoring for "${endpoint.name}" (ID: ${endpoint.id}) with ${(endpoint.cert_check_interval || DEFAULT_CERT_CHECK_INTERVAL) / 3600}h interval`, 'CERTIFICATE');
+        if (!isPaused) {
+          // Always check domain info for HTTP endpoints
+          await this.checkDomainInfo(endpoint);
+          
+          // Only check certificate if enabled
+          if (isCertCheckEnabled) {
+            await boundCertCheck(endpoint);
+            await this.logger.info(`Started certificate monitoring for "${endpoint.name}" (ID: ${endpoint.id}) with ${(endpoint.cert_check_interval || DEFAULT_CERT_CHECK_INTERVAL) / 3600}h interval`, 'CERTIFICATE');
+          } else {
+            await this.logger.info(`Started domain monitoring for "${endpoint.name}" (ID: ${endpoint.id}) with ${(endpoint.cert_check_interval || DEFAULT_CERT_CHECK_INTERVAL) / 3600}h interval`, 'DOMAIN');
+          }
         } else {
-          await this.logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) certificate monitoring not started - endpoint paused: ${isPaused}, cert checking enabled: ${isCertCheckEnabled}`, 'CERTIFICATE');
+          await this.logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) certificate/domain monitoring not started - endpoint paused: ${isPaused}`, 'CERTIFICATE');
           return;
         }
       } catch (err) {
-        await this.logger.error(`Error in initial certificate check for endpoint ${endpoint.id} (${endpoint.name}): ${err}`, 'CERTIFICATE');
+        await this.logger.error(`Error in initial certificate/domain check for endpoint ${endpoint.id} (${endpoint.name}): ${err}`, 'CERTIFICATE');
       }
       scheduleCertCheck();
     })();

@@ -15,7 +15,9 @@ import { OIDCService } from './services/oidc';
 import { KafkaService } from './services/kafka';
 import { MonitoringService } from './services/monitoring';
 import { NotificationService } from './services/notifications';
+import { DomainInfoService } from './services/domain-info';
 import { CertificateService } from './services/certificate';
+import { StatusPageService } from './services/status-pages';
 
 // Import route handlers
 import { createAuthRoutes, createAuthMiddleware } from './routes/auth';
@@ -23,6 +25,7 @@ import { createEndpointsRoutes } from './routes/endpoints';
 import { createUserRoutes } from './routes/users';
 import { createOIDCRoutes } from './routes/oidc';
 import { createPreferencesRoutes } from './routes/preferences';
+import { createStatusPageRoutes } from './routes/status-pages';
 
 async function main() {
   // Initialize database
@@ -34,33 +37,57 @@ async function main() {
   const oidcService = new OIDCService(db, logger);
   const kafkaService = new KafkaService(db, logger);
   const notificationService = new NotificationService(db, logger);
+  const domainInfoService = new DomainInfoService(logger);
   const certificateService = new CertificateService(logger);
+  const statusPageService = new StatusPageService(db, logger);
   
   // Create monitoring service with notification callback
   const monitoringService = new MonitoringService(
     db, 
     logger, 
     kafkaService,
+    domainInfoService,
     certificateService,
     (endpoint: any, status: string) => notificationService.sendNotification(endpoint, status)
   );
-
-  // Create authentication middleware
-  const { requireAuth, requireRole } = createAuthMiddleware(authService);
 
   logger.info('Starting Endpoint Monitor application', 'SYSTEM');
 
   // Create default admin user if none exists
   await authService.createDefaultAdminUser();
 
+  // Create authentication middleware
+  console.log('Creating auth middleware...');
+  const authMiddleware = createAuthMiddleware(authService);
+  console.log('Auth middleware created:', authMiddleware);
+  console.log('Auth middleware keys:', Object.keys(authMiddleware));
+  
+  // Access properties directly instead of destructuring
+  const requireAuth = authMiddleware.requireAuth;
+  const requireRole = authMiddleware.requireRole;
+  
+  console.log('Direct access requireAuth:', typeof requireAuth);
+  console.log('Direct access requireRole:', typeof requireRole);
+  
+  // Debug: Verify middleware functions are available
+  if (!requireAuth || !requireRole) {
+    throw new Error(`Auth middleware not properly created: requireAuth=${typeof requireAuth}, requireRole=${typeof requireRole}`);
+  }
+
+  console.log('Creating Elysia app...');
+  console.log('About to call createEndpointsRoutes with:');
+  console.log('  requireAuth:', typeof requireAuth);
+  console.log('  requireRole:', typeof requireRole);
+  
   const app = new Elysia()
     .use(cors())
     // Mount route handlers
     .use(createAuthRoutes(authService, logger))
-    .use(createEndpointsRoutes(db, authService, logger, monitoringService, requireAuth, requireRole))
+    .use(createEndpointsRoutes(db, authService, logger, monitoringService, domainInfoService, certificateService, requireAuth, requireRole))
     .use(createUserRoutes(db, authService, logger, requireRole))
     .use(createOIDCRoutes(db, oidcService, authService, logger, requireRole))
     .use(createPreferencesRoutes(db, requireRole))
+    .use(createStatusPageRoutes(statusPageService, logger, requireRole))
     
     // Notification services API
     .get('/api/notification-services', async () => {

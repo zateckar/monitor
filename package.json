@@ -1,14 +1,14 @@
 {
   "name": "endpoint-monitor",
   "version": "1.0.0",
+  "devDependencies": {
+    "concurrently": "^9.2.0"
+  },
   "scripts": {
     "start": "cd frontend && bun run build && bun run ../backend/index.ts",
     "dev": "concurrently \"cd backend && bun run dev\" \"cd frontend && bun run dev\"",
     "dev:backend": "cd backend && bun run dev",
     "dev:frontend": "cd frontend && bun run dev",
     "build": "cd frontend && bun run build"
-  },
-  "devDependencies": {
-    "concurrently": "^9.2.0"
   }
 }

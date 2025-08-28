@@ -28,6 +28,7 @@ import { DatabaseService } from './src/services/database';
 import { StatusPageService } from './src/services/status-pages';
 import { StaticFileService } from './src/services/static-files';
 import { CertificateService } from './src/services/certificate';
+import { DomainInfoService } from './src/services/domain-info';
 
 // Import route factories
 import { createAuthRoutes, createAuthMiddleware } from './src/routes/auth';
@@ -78,6 +79,7 @@ async function main() {
   const authService = new AuthService(db);
   const oidcService = new OIDCService(db, logger);
   const certificateService = new CertificateService(logger);
+  const domainInfoService = new DomainInfoService(logger);
   const databaseService = new DatabaseService(db, logger);
   const statusPageService = new StatusPageService(db, logger);
   const staticFileService = new StaticFileService();
@@ -96,6 +98,7 @@ async function main() {
     db,
     logger,
     kafkaService,
+    domainInfoService,
     certificateService,
     sendNotification
   );
@@ -111,7 +114,7 @@ async function main() {
 
   // Create route instances
   const authRoutes = createAuthRoutes(authService, logger);
-  const endpointsRoutes = createEndpointsRoutes(db, authService, logger, monitoringService, requireAuth, requireRole);
+  const endpointsRoutes = createEndpointsRoutes(db, authService, logger, monitoringService, domainInfoService, certificateService, requireAuth, requireRole);
   const oidcRoutes = createOIDCRoutes(db, oidcService, authService, logger, requireRole);
   const userRoutes = createUserRoutes(db, authService, logger, requireRole);
   const notificationRoutes = createNotificationRoutes(db, logger);

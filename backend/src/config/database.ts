@@ -45,6 +45,12 @@ function createTables(db: Database): void {
       cert_expiry_date DATETIME,
       cert_check_interval INTEGER DEFAULT 21600,
 
+      -- Domain information monitoring
+      domain_expires_in INTEGER,
+      domain_expiry_date DATETIME,
+      domain_creation_date DATETIME,
+      domain_updated_date DATETIME,
+
       -- mTLS (Client Certificates) - for HTTP and Kafka
       client_cert_enabled BOOLEAN DEFAULT false,
       client_cert_public_key TEXT,
@@ -88,6 +94,7 @@ function createTables(db: Database): void {
       endpoint_id INTEGER,
       response_time INTEGER,
       status TEXT,
+      failure_reason TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(endpoint_id) REFERENCES endpoints(id)
     )
@@ -225,7 +232,12 @@ function runMigrations(db: Database): void {
     'ALTER TABLE endpoints ADD COLUMN kafka_consumer_auto_commit BOOLEAN DEFAULT true',
     'ALTER TABLE endpoints ADD COLUMN cert_expires_in INTEGER',
     'ALTER TABLE endpoints ADD COLUMN cert_expiry_date DATETIME',
-    'ALTER TABLE endpoints ADD COLUMN cert_check_interval INTEGER DEFAULT 21600'
+    'ALTER TABLE endpoints ADD COLUMN cert_check_interval INTEGER DEFAULT 21600',
+    'ALTER TABLE endpoints ADD COLUMN domain_expires_in INTEGER',
+    'ALTER TABLE endpoints ADD COLUMN domain_expiry_date DATETIME',
+    'ALTER TABLE endpoints ADD COLUMN domain_creation_date DATETIME',
+    'ALTER TABLE endpoints ADD COLUMN domain_updated_date DATETIME',
+    'ALTER TABLE response_times ADD COLUMN failure_reason TEXT'
   ];
 
   console.log('Running database migrations...');
