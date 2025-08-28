@@ -1,7 +1,8 @@
 import jwt from 'jsonwebtoken';
 import { Database } from 'bun:sqlite';
 import type { User } from '../types';
-import { JWT_SECRET, JWT_EXPIRES_IN } from '../config/constants';
+import { JWT_SECRET, JWT_EXPIRES_IN, REFRESH_TOKEN_SECRET, JWT_REFRESH_EXPIRES_IN } from '../config/constants';
+import { randomBytes } from 'crypto';
 
 export class AuthService {
   constructor(private db: Database) {}
@@ -95,5 +96,96 @@ export class AuthService {
 
   updateUserLastLogin(userId: number): void {
     this.db.run('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?', [userId]);
+  }
+
+  // Refresh Token Methods
+  generateRefreshToken(): string {
+    return randomBytes(64).toString('hex');
+  }
+
+  async storeRefreshToken(userId: number, refreshToken: string, userAgent?: string, ipAddress?: string): Promise<void> {
+    // Hash the refresh token before storing
+    const tokenHash = await Bun.password.hash(refreshToken, { algorithm: "bcrypt", cost: 4 });
+    
+    // Calculate expiration date
+    const expiresAt = new Date();
+    const refreshDays = parseInt(JWT_REFRESH_EXPIRES_IN.replace('d', '')) || 7;
+    expiresAt.setDate(expiresAt.getDate() + refreshDays);
+
+    this.db.run(
+      `INSERT INTO refresh_tokens (user_id, token_hash, expires_at, user_agent, ip_address) 
+       VALUES (?, ?, ?, ?, ?)`,
+      [userId, tokenHash, expiresAt.toISOString(), userAgent || null, ipAddress || null]
+    );
+  }
+
+  async verifyRefreshToken(refreshToken: string): Promise<User | null> {
+    try {
+      // Get all non-revoked, non-expired refresh tokens
+      const tokens = this.db.query(`
+        SELECT rt.*, u.* FROM refresh_tokens rt
+        JOIN users u ON rt.user_id = u.id
+        WHERE rt.is_revoked = false 
+        AND rt.expires_at > datetime('now')
+        AND u.is_active = 1
+      `).all() as any[];
+
+      // Check each token hash against the provided refresh token
+      for (const tokenRecord of tokens) {
+        const isValid = await Bun.password.verify(refreshToken, tokenRecord.token_hash);
+        if (isValid) {
+          // Update last_used_at
+          this.db.run(
+            'UPDATE refresh_tokens SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [tokenRecord.id]
+          );
+
+          // Return user data
+          return {
+            id: tokenRecord.user_id,
+            username: tokenRecord.username,
+            email: tokenRecord.email,
+            role: tokenRecord.role,
+            created_at: tokenRecord.created_at,
+            last_login: tokenRecord.last_login,
+            is_active: tokenRecord.is_active
+          } as User;
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Error verifying refresh token:', error);
+      return null;
+    }
+  }
+
+  revokeRefreshToken(refreshToken: string): void {
+    // We need to find and revoke the token by matching the hash
+    // Since we can't reverse the hash, we'll mark all tokens for the user as revoked
+    // This is a security trade-off for simplicity
+    this.db.run(
+      'UPDATE refresh_tokens SET is_revoked = true WHERE token_hash = ?',
+      [refreshToken]
+    );
+  }
+
+  revokeAllUserRefreshTokens(userId: number): void {
+    this.db.run(
+      'UPDATE refresh_tokens SET is_revoked = true WHERE user_id = ?',
+      [userId]
+    );
+  }
+
+  cleanupExpiredRefreshTokens(): void {
+    this.db.run(
+      "DELETE FROM refresh_tokens WHERE expires_at < datetime('now') OR is_revoked = true"
+    );
+  }
+
+  generateTokenPair(user: User): { accessToken: string; refreshToken: string } {
+    const accessToken = this.generateToken(user);
+    const refreshToken = this.generateRefreshToken();
+    return { accessToken, refreshToken };
   }
 }

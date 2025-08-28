@@ -24,7 +24,7 @@ const serializeCookie = (name: string, value: string, options: {
 
 export function createAuthRoutes(authService: AuthService, logger: LoggerService) {
   return new Elysia({ prefix: '/api/auth' })
-    .post('/login', async ({ body, set }) => {
+    .post('/login', async ({ body, set, request }) => {
       const { username, password } = body;
 
       // Get user from database
@@ -45,11 +45,26 @@ export function createAuthRoutes(authService: AuthService, logger: LoggerService
       // Update last login
       authService.updateUserLastLogin(user.id);
 
-      // Generate JWT token
-      const token = authService.generateToken(user);
+      // Generate access and refresh tokens
+      const { accessToken, refreshToken } = authService.generateTokenPair(user);
 
-      // Set HTTP-only cookie for web clients
-      const cookieValue = serializeCookie('auth_token', token, {
+      // Store refresh token in database
+      const userAgent = request.headers.get('user-agent') || undefined;
+      const clientIP = request.headers.get('x-forwarded-for') || 
+                      request.headers.get('x-real-ip') || undefined;
+      
+      await authService.storeRefreshToken(user.id, refreshToken, userAgent, clientIP);
+
+      // Set HTTP-only cookies for both tokens
+      const accessCookie = serializeCookie('auth_token', accessToken, {
+        httpOnly: true,
+        secure: false, // Set to true in production with HTTPS
+        sameSite: 'lax',
+        maxAge: 15 * 60, // 15 minutes
+        path: '/'
+      });
+
+      const refreshCookie = serializeCookie('refresh_token', refreshToken, {
         httpOnly: true,
         secure: false, // Set to true in production with HTTPS
         sameSite: 'lax',
@@ -57,7 +72,8 @@ export function createAuthRoutes(authService: AuthService, logger: LoggerService
         path: '/'
       });
 
-      set.headers['Set-Cookie'] = cookieValue;
+      // Set both cookies by joining them
+      set.headers['Set-Cookie'] = `${accessCookie}, ${refreshCookie}`;
 
       logger.info(`User "${username}" logged in successfully`, 'AUTH');
 
@@ -70,7 +86,8 @@ export function createAuthRoutes(authService: AuthService, logger: LoggerService
           role: user.role,
           created_at: user.created_at
         },
-        token
+        token: accessToken,
+        refreshToken
       };
     }, {
       body: t.Object({
@@ -78,9 +95,85 @@ export function createAuthRoutes(authService: AuthService, logger: LoggerService
         password: t.String({ minLength: 1 })
       })
     })
-    .post('/logout', async ({ set }) => {
-      // Clear the auth cookie
-      const cookieValue = serializeCookie('auth_token', '', {
+    .post('/refresh', async ({ request, set }) => {
+      // Get refresh token from cookies
+      const cookieHeader = request.headers.get('cookie');
+      let refreshToken = null;
+      
+      if (cookieHeader) {
+        const cookies: Record<string, string> = {};
+        cookieHeader.split(';').forEach(cookie => {
+          const [name, ...rest] = cookie.trim().split('=');
+          if (name && rest.length > 0) {
+            cookies[name] = rest.join('=');
+          }
+        });
+        refreshToken = cookies.refresh_token || null;
+      }
+
+      if (!refreshToken) {
+        set.status = 401;
+        return { error: 'Refresh token required' };
+      }
+
+      // Verify refresh token and get user
+      const user = await authService.verifyRefreshToken(refreshToken);
+      if (!user) {
+        set.status = 401;
+        return { error: 'Invalid or expired refresh token' };
+      }
+
+      // Generate new access token
+      const accessToken = authService.generateToken(user);
+
+      // Set new access token cookie
+      const accessCookie = serializeCookie('auth_token', accessToken, {
+        httpOnly: true,
+        secure: false, // Set to true in production with HTTPS
+        sameSite: 'lax',
+        maxAge: 15 * 60, // 15 minutes
+        path: '/'
+      });
+
+      set.headers['Set-Cookie'] = accessCookie;
+
+      logger.info(`Access token refreshed for user "${user.username}"`, 'AUTH');
+
+      return {
+        success: true,
+        token: accessToken,
+        user: {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          role: user.role,
+          created_at: user.created_at
+        }
+      };
+    })
+    .post('/logout', async ({ set, request }) => {
+      // Get refresh token from cookies to revoke it
+      const cookieHeader = request.headers.get('cookie');
+      if (cookieHeader) {
+        const cookies: Record<string, string> = {};
+        cookieHeader.split(';').forEach(cookie => {
+          const [name, ...rest] = cookie.trim().split('=');
+          if (name && rest.length > 0) {
+            cookies[name] = rest.join('=');
+          }
+        });
+        const refreshToken = cookies.refresh_token;
+        if (refreshToken) {
+          // Find and revoke the refresh token
+          const user = await authService.verifyRefreshToken(refreshToken);
+          if (user) {
+            authService.revokeAllUserRefreshTokens(user.id);
+          }
+        }
+      }
+
+      // Clear both cookies
+      const clearAccessCookie = serializeCookie('auth_token', '', {
         httpOnly: true,
         secure: false,
         sameSite: 'lax',
@@ -88,7 +181,15 @@ export function createAuthRoutes(authService: AuthService, logger: LoggerService
         path: '/'
       });
 
-      set.headers['Set-Cookie'] = cookieValue;
+      const clearRefreshCookie = serializeCookie('refresh_token', '', {
+        httpOnly: true,
+        secure: false,
+        sameSite: 'lax',
+        maxAge: 0,
+        path: '/'
+      });
+
+      set.headers['Set-Cookie'] = `${clearAccessCookie}, ${clearRefreshCookie}`;
 
       return { success: true };
     })

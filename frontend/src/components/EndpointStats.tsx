@@ -35,17 +35,25 @@ interface Stats {
   response_count: number;
 }
 
+interface CertificateData {
+  expires_in: number | null;
+  expiry_date: string | null;
+}
+
 const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) => {
   const [stats, setStats] = useState<Stats | null>(null);
   const [domainInfo, setDomainInfo] = useState<DomainInfo | null>(null);
+  const [certificateData, setCertificateData] = useState<CertificateData | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingDomain, setLoadingDomain] = useState(true);
+  const [loadingCertificate, setLoadingCertificate] = useState(true);
   const [certificateModalOpen, setCertificateModalOpen] = useState(false);
 
   useEffect(() => {
     if (endpoint && typeof endpoint.id === 'number') {
       setLoading(true);
       setLoadingDomain(true);
+      setLoadingCertificate(true);
 
       // Fetch main stats
       fetch(`/api/endpoints/${endpoint.id}/stats?range=${timeRange}`)
@@ -64,6 +72,43 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
           setLoadingDomain(false);
         })
         .catch(() => setLoadingDomain(false));
+
+      // Fetch fresh certificate data if certificate checking is enabled
+      if (endpoint.check_cert_expiry) {
+        fetch(`/api/endpoints/${endpoint.id}/certificate-chain`)
+          .then(res => res.ok ? res.json() : null)
+          .then(data => {
+            if (data && data.certificates && data.certificates.length > 0) {
+              const leafCert = data.certificates[0]; // First certificate is the leaf/end-entity certificate
+              setCertificateData({
+                expires_in: leafCert.daysRemaining,
+                expiry_date: leafCert.validTo
+              });
+            } else {
+              // Fallback to endpoint prop data
+              setCertificateData({
+                expires_in: endpoint.cert_expires_in,
+                expiry_date: endpoint.cert_expiry_date
+              });
+            }
+            setLoadingCertificate(false);
+          })
+          .catch(() => {
+            // Fallback to endpoint prop data on error
+            setCertificateData({
+              expires_in: endpoint.cert_expires_in,
+              expiry_date: endpoint.cert_expiry_date
+            });
+            setLoadingCertificate(false);
+          });
+      } else {
+        // Certificate checking not enabled
+        setCertificateData({
+          expires_in: null,
+          expiry_date: null
+        });
+        setLoadingCertificate(false);
+      }
     }
   }, [endpoint, timeRange]);
 
@@ -478,10 +523,10 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
                 <Avatar sx={{ 
                   bgcolor: `${!endpoint.check_cert_expiry
                     ? 'grey'
-                    : endpoint.cert_expires_in !== null
-                    ? (endpoint.cert_expires_in <= 7
+                    : certificateData?.expires_in !== null && certificateData?.expires_in !== undefined
+                    ? (certificateData.expires_in <= 7
                       ? 'error'
-                      : endpoint.cert_expires_in <= 21
+                      : certificateData.expires_in <= 21
                       ? 'warning'
                       : 'success')
                     : 'info'}.main`, 
@@ -494,17 +539,23 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
                   <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, display: 'block' }}>
                     Certificate
                   </Typography>
-                  <Typography variant="h6" component="div" sx={{ fontWeight: 'bold', lineHeight: 1.2 }}>
-                    {!endpoint.check_cert_expiry
-                      ? 'Not enabled'
-                      : endpoint.cert_expires_in !== null
-                      ? `${endpoint.cert_expires_in} days`
-                      : 'Checking...'}
-                  </Typography>
-                  {endpoint.cert_expiry_date && endpoint.cert_expires_in !== null && (
-                    <Typography variant="caption" color="text.secondary">
-                      {formatDate(endpoint.cert_expiry_date)}
-                    </Typography>
+                  {loadingCertificate ? (
+                    <CircularProgress size={20} />
+                  ) : (
+                    <>
+                      <Typography variant="h6" component="div" sx={{ fontWeight: 'bold', lineHeight: 1.2 }}>
+                        {!endpoint.check_cert_expiry
+                          ? 'Not enabled'
+                          : certificateData?.expires_in !== null && certificateData?.expires_in !== undefined
+                          ? `${certificateData.expires_in} days`
+                          : 'N/A'}
+                      </Typography>
+                      {certificateData?.expiry_date && certificateData?.expires_in !== null && certificateData?.expires_in !== undefined && (
+                        <Typography variant="caption" color="text.secondary">
+                          {formatDate(certificateData.expiry_date)}
+                        </Typography>
+                      )}
+                    </>
                   )}
                 </Box>
               </Box>

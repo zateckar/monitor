@@ -43,22 +43,33 @@ interface EndpointChartProps {
   timeRange: string;
 }
 
+interface Outage {
+  started_at: string;
+  ended_at: string | null;
+  duration_ms: number | null;
+  duration_text: string;
+  reason: string;
+}
+
 const EndpointChart = ({ endpointId, timeRange }: EndpointChartProps) => {
   const [data, setData] = useState<ResponseTime[]>([]);
   const [endpoint, setEndpoint] = useState<Endpoint | null>(null);
+  const [outages, setOutages] = useState<Outage[]>([]);
   const [themeSettings, setThemeSettings] = useState<ThemeSettings>(defaultThemeSettings);
 
   useEffect(() => {
     const fetchData = () => {
-      // Fetch both response times and endpoint info
+      // Fetch response times, endpoint info, and outages
       Promise.all([
         fetch(`/api/endpoints/${endpointId}/response-times?range=${timeRange}`).then(res => res.json()),
         fetch(`/api/endpoints`).then(res => res.json()).then((endpoints: Endpoint[]) => 
           endpoints.find((e: Endpoint) => e.id === endpointId)
-        )
-      ]).then(([responseData, endpointData]) => {
+        ),
+        fetch(`/api/endpoints/${endpointId}/outages?limit=100`).then(res => res.json())
+      ]).then(([responseData, endpointData, outageData]) => {
         setData(responseData);
         setEndpoint(endpointData || null);
+        setOutages(outageData);
       });
     };
 
@@ -116,65 +127,36 @@ const EndpointChart = ({ endpointId, timeRange }: EndpointChartProps) => {
   };
 
 
-  // Simple gap detection - large intervals between data points
-  const detectGaps = (data: ResponseTime[], heartbeatInterval: number) => {
-    if (data.length < 2 || !heartbeatInterval) return [];
-    
-    const gaps: Array<{start: string, end: string, duration: number}> = [];
-    const thresholdMs = heartbeatInterval * 1000 * 5; // 5x expected interval
-    
-    for (let i = 1; i < data.length; i++) {
-      const prevTime = new Date(data[i - 1].created_at).getTime();
-      const currTime = new Date(data[i].created_at).getTime();
-      const timeDiff = currTime - prevTime;
-      
-      if (timeDiff > thresholdMs) {
-        gaps.push({
-          start: data[i - 1].created_at,
-          end: data[i].created_at,
-          duration: Math.round(timeDiff / 60000)
-        });
-      }
-    }
-    
-    return gaps;
-  };
-
   // Check if data has aggregated points
   const hasAggregatedData = data.length > 0 && data[0].max_response_time !== undefined;
   
-  // Detect gaps
-  const monitoringGaps = endpoint ? detectGaps(data, endpoint.heartbeat_interval || 60) : [];
-
-  // Transform gaps to use numerical timestamps for ReferenceArea
-  const transformedGaps = monitoringGaps.map(gap => ({
-    ...gap,
-    startTimestamp: new Date(gap.start).getTime(),
-    endTimestamp: new Date(gap.end).getTime()
-  }));
-
-  // Create chart data - simple approach using connectNulls=false
-  const createChartData = (originalData: ResponseTime[], gaps: Array<{start: string, end: string}>) => {
-    if (gaps.length === 0) return originalData;
+  // Filter outages to only show those within the current chart time range
+  const getRelevantOutages = (outages: Outage[], chartData: ResponseTime[]) => {
+    if (chartData.length === 0) return [];
     
-    // Create a set of timestamps that are within gaps for fast lookup
-    const gapRanges = gaps.map(gap => ({
-      start: new Date(gap.start).getTime(),
-      end: new Date(gap.end).getTime()
-    }));
+    const chartStart = new Date(chartData[0].created_at).getTime();
+    const chartEnd = new Date(chartData[chartData.length - 1].created_at).getTime();
     
-    // Filter out data points that fall within gaps
-    return originalData.filter(point => {
-      const pointTime = new Date(point.created_at).getTime();
+    return outages.filter(outage => {
+      const outageStart = new Date(outage.started_at).getTime();
+      const outageEnd = outage.ended_at ? new Date(outage.ended_at).getTime() : Date.now();
       
-      // Check if point is within any gap
-      return !gapRanges.some(range => 
-        pointTime > range.start && pointTime < range.end
-      );
+      // Include outage if it overlaps with the chart time range
+      return outageStart <= chartEnd && outageEnd >= chartStart;
     });
   };
 
-  const chartData = createChartData(data, monitoringGaps);
+  const relevantOutages = getRelevantOutages(outages, data);
+
+  // Transform outages to use numerical timestamps for ReferenceArea
+  const transformedOutages = relevantOutages.map((outage, index) => ({
+    ...outage,
+    startTimestamp: new Date(outage.started_at).getTime(),
+    endTimestamp: outage.ended_at ? new Date(outage.ended_at).getTime() : Date.now()
+  }));
+
+  // Use all chart data without filtering
+  const chartData = data;
   
   // Transform data to use numerical timestamps for linear time axis
   const transformDataForLinearTime = (data: ResponseTime[]) => {
@@ -358,12 +340,12 @@ const EndpointChart = ({ endpointId, timeRange }: EndpointChartProps) => {
           />
           <Tooltip content={<LinearTimeTooltip />} />
           
-          {/* Render red bars for DOWN periods (monitoring gaps) */}
-          {transformedGaps.map((gap, index) => (
+          {/* Render red bars for DOWN periods (actual outages) */}
+          {transformedOutages.map((outage, index) => (
             <ReferenceArea
-              key={`gap-${index}`}
-              x1={gap.startTimestamp}
-              x2={gap.endTimestamp}
+              key={`outage-${index}`}
+              x1={outage.startTimestamp}
+              x2={outage.endTimestamp}
               fill={themeSettings.errorColor}
               fillOpacity={0.3}
               stroke="none"

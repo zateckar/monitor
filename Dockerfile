@@ -1,5 +1,5 @@
 # Use Bun runtime as base image
-FROM oven/bun:1 AS base
+FROM oven/bun:alpine AS base
 WORKDIR /app
 
 # Copy package files
