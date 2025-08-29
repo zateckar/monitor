@@ -138,7 +138,14 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
     return 'error';
   };
 
-  const StatCard = ({ icon, title, value, subtitle, progress, color }: any) => (
+  const StatCard = ({ icon, title, value, subtitle, progress, color }: {
+    icon: React.ReactNode;
+    title: string;
+    value: string;
+    subtitle?: string;
+    progress?: number;
+    color: string;
+  }) => (
     <Card variant="outlined" sx={{ p: 1.5, height: '100%' }}>
       <Stack spacing={0.8}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>

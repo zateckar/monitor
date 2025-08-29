@@ -53,7 +53,6 @@ interface Outage {
 
 const EndpointChart = ({ endpointId, timeRange }: EndpointChartProps) => {
   const [data, setData] = useState<ResponseTime[]>([]);
-  const [endpoint, setEndpoint] = useState<Endpoint | null>(null);
   const [outages, setOutages] = useState<Outage[]>([]);
   const [themeSettings, setThemeSettings] = useState<ThemeSettings>(defaultThemeSettings);
 
@@ -66,9 +65,8 @@ const EndpointChart = ({ endpointId, timeRange }: EndpointChartProps) => {
           endpoints.find((e: Endpoint) => e.id === endpointId)
         ),
         fetch(`/api/endpoints/${endpointId}/outages?limit=100`).then(res => res.json())
-      ]).then(([responseData, endpointData, outageData]) => {
+      ]).then(([responseData, , outageData]) => {
         setData(responseData);
-        setEndpoint(endpointData || null);
         setOutages(outageData);
       });
     };

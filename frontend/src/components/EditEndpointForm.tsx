@@ -54,38 +54,38 @@ const EditEndpointForm: React.FC<EditEndpointFormProps> = ({ endpoint, onUpdate,
   const [hasValidationErrors, setHasValidationErrors] = useState(false);
 
   // Real-time validation function
-  const validateField = (fieldName: string, value: any, validationType: string) => {
+  const validateField = (fieldName: string, value: string | number | boolean, validationType: string) => {
     let validation;
     switch (validationType) {
       case 'url':
-        validation = validateUrl(value);
+        validation = validateUrl(String(value));
         break;
       case 'text':
-        validation = validateText(value, MAX_LENGTHS.NAME, fieldName);
+        validation = validateText(String(value), MAX_LENGTHS.NAME, fieldName);
         break;
       case 'longtext':
-        validation = validateText(value, MAX_LENGTHS.HTTP_BODY, fieldName);
+        validation = validateText(String(value), MAX_LENGTHS.HTTP_BODY, fieldName);
         break;
       case 'headers':
-        validation = validateHttpHeaders(value);
+        validation = validateHttpHeaders(String(value));
         break;
       case 'json':
-        validation = validateJson(value, fieldName);
+        validation = validateJson(String(value), fieldName);
         break;
       case 'certificate':
-        validation = validateCertificate(value, fieldName);
+        validation = validateCertificate(String(value), fieldName);
         break;
       case 'privatekey':
-        validation = validatePrivateKey(value, fieldName);
+        validation = validatePrivateKey(String(value), fieldName);
         break;
       case 'number':
-        validation = validateNumber(value, 10, 86400, fieldName);
+        validation = validateNumber(Number(value), 10, 86400, fieldName);
         break;
       case 'port':
-        validation = validatePort(value);
+        validation = validatePort(Number(value));
         break;
       case 'statuses':
-        validation = validateHttpStatuses(value);
+        validation = validateHttpStatuses(String(value));
         break;
       default:
         validation = { isValid: true };

@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { Database } from 'bun:sqlite';
 import type { User } from '../types';
-import { JWT_SECRET, JWT_EXPIRES_IN, REFRESH_TOKEN_SECRET, JWT_REFRESH_EXPIRES_IN } from '../config/constants';
+import { JWT_SECRET, JWT_EXPIRES_IN, REFRESH_TOKEN_SECRET, JWT_REFRESH_EXPIRES_IN, USER_ACTIVITY_EXTEND_THRESHOLD, REFRESH_TOKEN_MAX_LIFETIME } from '../config/constants';
 import { randomBytes } from 'crypto';
 
 export class AuthService {
@@ -134,11 +134,14 @@ export class AuthService {
       for (const tokenRecord of tokens) {
         const isValid = await Bun.password.verify(refreshToken, tokenRecord.token_hash);
         if (isValid) {
-          // Update last_used_at
+          // Update last_used_at and track activity
           this.db.run(
             'UPDATE refresh_tokens SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?',
             [tokenRecord.id]
           );
+
+          // Check if we should extend the refresh token based on activity
+          await this.extendRefreshTokenIfNeeded(tokenRecord.id, tokenRecord.created_at);
 
           // Return user data
           return {
@@ -157,6 +160,87 @@ export class AuthService {
     } catch (error) {
       console.error('Error verifying refresh token:', error);
       return null;
+    }
+  }
+
+  /**
+   * Extends refresh token expiration if user has been active and token hasn't exceeded max lifetime
+   */
+  async extendRefreshTokenIfNeeded(tokenId: number, tokenCreatedAt: string): Promise<void> {
+    try {
+      const createdAt = new Date(tokenCreatedAt);
+      const now = new Date();
+      const tokenAge = now.getTime() - createdAt.getTime();
+
+      // Don't extend if token has exceeded maximum lifetime (90 days)
+      if (tokenAge >= REFRESH_TOKEN_MAX_LIFETIME) {
+        return;
+      }
+
+      // Get current token data
+      const token = this.db.query('SELECT * FROM refresh_tokens WHERE id = ?').get(tokenId) as any;
+      if (!token) return;
+
+      const expiresAt = new Date(token.expires_at);
+      const timeUntilExpiry = expiresAt.getTime() - now.getTime();
+
+      // If token expires in less than 7 days, extend it
+      if (timeUntilExpiry < USER_ACTIVITY_EXTEND_THRESHOLD) {
+        // Calculate new expiration (add 30 days from now, but respect max lifetime)
+        const refreshDays = parseInt(JWT_REFRESH_EXPIRES_IN.replace('d', '')) || 30;
+        const newExpiresAt = new Date(now.getTime() + (refreshDays * 24 * 60 * 60 * 1000));
+        
+        // Ensure we don't exceed max lifetime
+        const maxAllowedExpiry = new Date(createdAt.getTime() + REFRESH_TOKEN_MAX_LIFETIME);
+        const finalExpiresAt = newExpiresAt > maxAllowedExpiry ? maxAllowedExpiry : newExpiresAt;
+
+        this.db.run(
+          'UPDATE refresh_tokens SET expires_at = ?, extended_at = CURRENT_TIMESTAMP WHERE id = ?',
+          [finalExpiresAt.toISOString(), tokenId]
+        );
+
+        console.log(`Extended refresh token ${tokenId} until ${finalExpiresAt.toISOString()}`);
+      }
+    } catch (error) {
+      console.error('Error extending refresh token:', error);
+    }
+  }
+
+  /**
+   * Records user activity to help with session management
+   */
+  recordUserActivity(userId: number, activityType: 'api_call' | 'page_view' | 'refresh_token' = 'api_call'): void {
+    try {
+      this.db.run(
+        'UPDATE users SET last_activity = CURRENT_TIMESTAMP WHERE id = ?',
+        [userId]
+      );
+    } catch (error) {
+      console.error('Error recording user activity:', error);
+    }
+  }
+
+  /**
+   * Gets user activity information
+   */
+  getUserActivity(userId: number): { lastActivity: string | null; isActiveWithinWeek: boolean } {
+    try {
+      const user = this.db.query('SELECT last_activity FROM users WHERE id = ?').get(userId) as any;
+      if (!user || !user.last_activity) {
+        return { lastActivity: null, isActiveWithinWeek: false };
+      }
+
+      const lastActivity = new Date(user.last_activity);
+      const weekAgo = new Date(Date.now() - (7 * 24 * 60 * 60 * 1000));
+      const isActiveWithinWeek = lastActivity > weekAgo;
+
+      return {
+        lastActivity: user.last_activity,
+        isActiveWithinWeek
+      };
+    } catch (error) {
+      console.error('Error getting user activity:', error);
+      return { lastActivity: null, isActiveWithinWeek: false };
     }
   }
 

@@ -95,7 +95,7 @@ export function createAuthRoutes(authService: AuthService, logger: LoggerService
         password: t.String({ minLength: 1 })
       })
     })
-    .post('/refresh', async ({ request, set }) => {
+  .post('/refresh', async ({ request, set }) => {
       // Get refresh token from cookies
       const cookieHeader = request.headers.get('cookie');
       let refreshToken = null;
@@ -122,6 +122,9 @@ export function createAuthRoutes(authService: AuthService, logger: LoggerService
         set.status = 401;
         return { error: 'Invalid or expired refresh token' };
       }
+
+      // Record refresh activity
+      authService.recordUserActivity(user.id, 'refresh_token');
 
       // Generate new access token
       const accessToken = authService.generateToken(user);
@@ -209,6 +212,37 @@ export function createAuthRoutes(authService: AuthService, logger: LoggerService
         role: user.role,
         created_at: user.created_at,
         last_login: user.last_login
+      };
+    })
+    .post('/activity', async ({ request }) => {
+      const user = await authService.authenticateUser(request);
+      if (!user) {
+        return new Response(JSON.stringify({ error: 'Authentication required' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      // Record user activity
+      authService.recordUserActivity(user.id, 'api_call');
+
+      return { success: true };
+    })
+    .get('/activity', async ({ request }) => {
+      const user = await authService.authenticateUser(request);
+      if (!user) {
+        return new Response(JSON.stringify({ error: 'Authentication required' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      // Get user activity information
+      const activity = authService.getUserActivity(user.id);
+
+      return {
+        lastActivity: activity.lastActivity,
+        isActiveWithinWeek: activity.isActiveWithinWeek
       };
     });
 }

@@ -23,6 +23,7 @@ import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
 
 interface EndpointDetailProps {
   endpoint: Endpoint | null;
+  endpoints?: Endpoint[];
   onUpdate: (endpoint: Endpoint) => void;
   onDelete: (id: number) => void;
   onTogglePause?: (id: number) => void;
@@ -32,7 +33,7 @@ interface EndpointDetailProps {
   isPaused?: boolean;
 }
 
-const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, onUpdate, onDelete, onTogglePause, onCancelCreation, onEditingChange, onRefresh, isPaused }) => {
+const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, endpoints, onUpdate, onDelete, onTogglePause, onCancelCreation, onEditingChange, onRefresh, isPaused }) => {
   const { user } = useAuth();
   const [timeRange, setTimeRange] = useState(() => getStoredTimePeriod());
   const [isEditing, setIsEditing] = useState(false);
@@ -129,7 +130,7 @@ const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, onUpdate, onD
   };
 
   if (!endpoint) {
-    return <Dashboard isPaused={isPaused} onRefresh={onRefresh} />;
+    return <Dashboard endpoints={endpoints} isPaused={isPaused} onRefresh={onRefresh} />;
   }
 
   const getStatusColor = (status: string) => {

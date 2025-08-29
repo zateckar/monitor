@@ -252,7 +252,9 @@ function runMigrations(db: Database): void {
     'ALTER TABLE endpoints ADD COLUMN domain_expiry_date DATETIME',
     'ALTER TABLE endpoints ADD COLUMN domain_creation_date DATETIME',
     'ALTER TABLE endpoints ADD COLUMN domain_updated_date DATETIME',
-    'ALTER TABLE response_times ADD COLUMN failure_reason TEXT'
+    'ALTER TABLE response_times ADD COLUMN failure_reason TEXT',
+    'ALTER TABLE users ADD COLUMN last_activity DATETIME',
+    'ALTER TABLE refresh_tokens ADD COLUMN extended_at DATETIME'
   ];
 
   console.log('Running database migrations...');

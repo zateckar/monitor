@@ -158,7 +158,15 @@ export interface DnsInfo {
   TXT: string[];
   MX: Array<{ exchange: string; priority: number }>;
   NS: string[];
-  SOA: any | null;
+  SOA: { 
+    primary: string; 
+    admin: string; 
+    serial: number; 
+    refresh: number; 
+    retry: number; 
+    expiration: number; 
+    minimum: number; 
+  } | null;
 }
 
 export interface ServerInfo {
@@ -168,9 +176,26 @@ export interface ServerInfo {
 
 export interface EnhancedDomainInfo {
   domain: DomainInfo;
-  certificate: any | null; // CertificateResult from backend
+  certificate: CertificateChain | null;
   dns: DnsInfo | null;
   server: ServerInfo | null;
+}
+
+export interface TreeNode {
+  id: string | number;
+  name: string;
+  type: 'endpoint' | 'group';
+  parentId?: string;
+  children?: TreeNode[];
+  collapsed?: boolean;
+  // Include all endpoint properties for endpoint nodes
+  endpoint?: Endpoint;
+}
+
+export interface EndpointTreeStructure {
+  nodes: TreeNode[];
+  groups: EndpointGroup[];
+  ungroupedEndpoints: Endpoint[];
 }
 
 // Tree structure types for endpoint grouping

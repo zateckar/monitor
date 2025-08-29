@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Routes, Route, useParams } from 'react-router-dom';
 import { ThemeProvider, CssBaseline, createTheme, CircularProgress, Box } from '@mui/material';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
+import AuthProvider, { useAuth } from './contexts/AuthContext';
 import Layout from './components/Layout';
 import EndpointList from './components/EndpointList';
 import EndpointDetail from './components/EndpointDetail';
@@ -9,7 +9,6 @@ import Settings from './components/Settings';
 import StatusPage from './components/StatusPage';
 import LoginPage from './components/LoginPage';
 import type { Endpoint } from './types';
-import { Button } from '@mui/material';
 import { updateFavicon, checkMonitorStatus } from './utils/favicon';
 
 interface ThemeSettings {
@@ -139,7 +138,7 @@ function MainApp() {
   const [isEditingMonitor, setIsEditingMonitor] = useState(false);
   const { user } = useAuth();
 
-  const fetchData = () => {
+  const fetchData = useCallback(() => {
     // Don't auto-refresh when creating or editing a monitor to avoid interruption
     if (isCreatingNewMonitor || isEditingMonitor) {
       return;
@@ -171,7 +170,7 @@ function MainApp() {
       .catch((error) => {
         console.error('Error fetching endpoints:', error);
       });
-  };
+  }, [isCreatingNewMonitor, isEditingMonitor]);
 
   useEffect(() => {
     // Initial fetch
@@ -182,7 +181,7 @@ function MainApp() {
 
     // Cleanup interval on component unmount
     return () => clearInterval(interval);
-  }, [isCreatingNewMonitor, isEditingMonitor]);
+  }, [fetchData]);
 
   // Update favicon based on monitor status
   useEffect(() => {
@@ -365,6 +364,7 @@ function MainApp() {
               <EndpointDetail
                 key={selectedEndpoint ? selectedEndpoint.id : 'none'}
                 endpoint={selectedEndpoint}
+                endpoints={endpoints}
                 onUpdate={updateEndpoint}
                 onDelete={deleteEndpoint}
                 onTogglePause={togglePauseEndpoint}

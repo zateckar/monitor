@@ -8,6 +8,7 @@ interface AuthContextType {
   loading: boolean;
   checkAuth: () => Promise<void>;
   refreshToken: () => Promise<boolean>;
+  recordActivity: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -24,8 +25,7 @@ interface AuthProviderProps {
   children: React.ReactNode;
 }
 
-// eslint-disable-next-line react-refresh/only-export-components
-export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
+const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -150,6 +150,19 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   }, [scheduleTokenRefresh]);
 
+  const recordActivity = useCallback(async (): Promise<void> => {
+    if (!user) return;
+
+    try {
+      await fetch('/api/auth/activity', {
+        method: 'POST',
+        credentials: 'include',
+      });
+    } catch (error) {
+      console.error('Error recording activity:', error);
+    }
+  }, [user]);
+
   const logout = async () => {
     // Clear refresh timeout
     if (refreshTimeoutRef.current) {
@@ -187,6 +200,48 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   }, [user, scheduleTokenRefresh]);
 
+  // Activity tracking - record activity every 5 minutes when user is active
+  useEffect(() => {
+    if (!user) return;
+
+    let activityInterval: NodeJS.Timeout;
+    let lastActivityTime = Date.now();
+    
+    const recordPeriodicActivity = () => {
+      recordActivity();
+      lastActivityTime = Date.now();
+    };
+
+    // Track user interactions
+    const trackActivity = () => {
+      const now = Date.now();
+      // Only record if last activity was more than 1 minute ago
+      if (now - lastActivityTime > 60000) {
+        recordActivity();
+        lastActivityTime = now;
+      }
+    };
+
+    // Set up periodic activity recording (every 5 minutes)
+    activityInterval = setInterval(recordPeriodicActivity, 5 * 60 * 1000);
+
+    // Track various user interactions
+    const events = ['click', 'keydown', 'scroll', 'mousemove', 'touchstart'];
+    events.forEach(event => {
+      document.addEventListener(event, trackActivity, { passive: true });
+    });
+
+    // Cleanup
+    return () => {
+      if (activityInterval) {
+        clearInterval(activityInterval);
+      }
+      events.forEach(event => {
+        document.removeEventListener(event, trackActivity);
+      });
+    };
+  }, [user, recordActivity]);
+
   const value = {
     user,
     login,
@@ -194,7 +249,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     loading,
     checkAuth,
     refreshToken,
+    recordActivity,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
+
+export default AuthProvider;

@@ -115,13 +115,13 @@ serve({
 serve({
   port: PORT + 1,
   websocket: {
-    message(_ws, _message) {
+    message() {
       // Echo back for now
     },
-    open(_ws) {
+    open() {
       console.log("Hot reload client connected");
     },
-    close(_ws) {
+    close() {
       console.log("Hot reload client disconnected");
     },
   },

@@ -23,8 +23,7 @@ import {
   History,
   Warning,
   CheckCircle,
-  Error as ErrorIcon,
-  Refresh as RefreshIcon
+  Error as ErrorIcon
 } from '@mui/icons-material';
 import type { Endpoint, Outage } from '../types';
 
@@ -39,11 +38,12 @@ interface DashboardStats {
 }
 
 interface DashboardProps {
+  endpoints?: Endpoint[];
   isPaused?: boolean;
   onRefresh?: () => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ isPaused = false }) => {
+const Dashboard: React.FC<DashboardProps> = ({ endpoints: providedEndpoints, isPaused = false }) => {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [outages, setOutages] = useState<Array<Outage & { endpointName: string; endpointUrl: string }>>([]);
   const [loading, setLoading] = useState(true);
@@ -60,12 +60,17 @@ const Dashboard: React.FC<DashboardProps> = ({ isPaused = false }) => {
         setLoading(true);
         setError(null);
 
-        // Fetch all endpoints
-        const endpointsResponse = await fetch('/api/endpoints');
-        if (!endpointsResponse.ok) {
-          throw new Error('Failed to fetch endpoints');
+        // Use provided endpoints or fetch them if not provided
+        let endpoints: Endpoint[];
+        if (providedEndpoints) {
+          endpoints = providedEndpoints;
+        } else {
+          const endpointsResponse = await fetch('/api/endpoints');
+          if (!endpointsResponse.ok) {
+            throw new Error('Failed to fetch endpoints');
+          }
+          endpoints = await endpointsResponse.json();
         }
-        const endpoints: Endpoint[] = await endpointsResponse.json();
 
         // Calculate aggregated stats
         const totalMonitors = endpoints.length;
@@ -145,10 +150,13 @@ const Dashboard: React.FC<DashboardProps> = ({ isPaused = false }) => {
 
     fetchDashboardData();
 
-    // Refresh dashboard data every 30 seconds
-    const interval = setInterval(fetchDashboardData, 30000);
-    return () => clearInterval(interval);
-  }, [isPaused]);
+    // Only set up auto-refresh if endpoints are not provided (standalone mode)
+    // If endpoints are provided, the parent component handles refreshing
+    if (!providedEndpoints) {
+      const interval = setInterval(fetchDashboardData, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [isPaused, providedEndpoints]);
 
   const formatResponseTime = (time: number): string => {
     if (time < 1000) {

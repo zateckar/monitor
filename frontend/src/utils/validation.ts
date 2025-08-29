@@ -32,7 +32,7 @@ const DANGEROUS_PATTERNS = [
 export interface ValidationResult {
   isValid: boolean;
   error?: string;
-  sanitizedValue?: any;
+  sanitizedValue?: unknown;
 }
 
 /**
@@ -253,7 +253,7 @@ export function validatePrivateKey(key: string, fieldName: string): ValidationRe
 /**
  * Validates numeric input with bounds
  */
-export function validateNumber(value: any, min: number, max: number, fieldName: string): ValidationResult {
+export function validateNumber(value: unknown, min: number, max: number, fieldName: string): ValidationResult {
   if (value === null || value === undefined || value === '') {
     return { isValid: false, error: `${fieldName} is required` };
   }
@@ -273,7 +273,7 @@ export function validateNumber(value: any, min: number, max: number, fieldName: 
 /**
  * Validates optional port number
  */
-export function validatePort(port: any): ValidationResult {
+export function validatePort(port: unknown): ValidationResult {
   if (port === null || port === undefined || port === '') {
     return { isValid: true, sanitizedValue: null };
   }
@@ -298,7 +298,7 @@ export function validateHttpStatuses(statuses: string): ValidationResult {
     if (!statusValidation.isValid) {
       return statusValidation;
     }
-    validatedStatuses.push(statusValidation.sanitizedValue!);
+    validatedStatuses.push(statusValidation.sanitizedValue as number);
   }
 
   return { isValid: true, sanitizedValue: validatedStatuses };
@@ -308,30 +308,33 @@ export function validateHttpStatuses(statuses: string): ValidationResult {
  * Real-time validation hook for form fields
  */
 export function useFieldValidation() {
-  const validateField = (value: any, type: string, fieldName: string): ValidationResult => {
+  const validateField = (value: unknown, type: string, fieldName: string): ValidationResult => {
+    // Convert value to string for string-based validations
+    const stringValue = typeof value === 'string' ? value : String(value || '');
+    
     switch (type) {
       case 'url':
-        return validateUrl(value);
+        return validateUrl(stringValue);
       case 'text':
-        return validateText(value, MAX_LENGTHS.NAME, fieldName);
+        return validateText(stringValue, MAX_LENGTHS.NAME, fieldName);
       case 'longtext':
-        return validateText(value, MAX_LENGTHS.DESCRIPTION, fieldName);
+        return validateText(stringValue, MAX_LENGTHS.DESCRIPTION, fieldName);
       case 'json':
-        return validateJson(value, fieldName);
+        return validateJson(stringValue, fieldName);
       case 'headers':
-        return validateHttpHeaders(value);
+        return validateHttpHeaders(stringValue);
       case 'email':
-        return validateEmail(value);
+        return validateEmail(stringValue);
       case 'certificate':
-        return validateCertificate(value, fieldName);
+        return validateCertificate(stringValue, fieldName);
       case 'privatekey':
-        return validatePrivateKey(value, fieldName);
+        return validatePrivateKey(stringValue, fieldName);
       case 'number':
         return validateNumber(value, 1, 86400, fieldName);
       case 'port':
         return validatePort(value);
       case 'statuses':
-        return validateHttpStatuses(value);
+        return validateHttpStatuses(stringValue);
       default:
         return { isValid: true, sanitizedValue: value };
     }

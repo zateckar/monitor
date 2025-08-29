@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Dialog,
   DialogTitle,
@@ -57,7 +57,7 @@ const CertificateModal: React.FC<CertificateModalProps> = ({
   const [enhancedDomainInfo, setEnhancedDomainInfo] = useState<EnhancedDomainInfo | null>(null);
   const [activeTab, setActiveTab] = useState(0);
 
-  const fetchCertificateChain = async () => {
+  const fetchCertificateChain = useCallback(async () => {
     setLoading(true);
     setError(null);
     
@@ -76,9 +76,9 @@ const CertificateModal: React.FC<CertificateModalProps> = ({
     } finally {
       setLoading(false);
     }
-  };
+  }, [endpointId]);
 
-  const fetchEnhancedDomainInfo = async () => {
+  const fetchEnhancedDomainInfo = useCallback(async () => {
     setDomainLoading(true);
     setDomainError(null);
     
@@ -97,14 +97,14 @@ const CertificateModal: React.FC<CertificateModalProps> = ({
     } finally {
       setDomainLoading(false);
     }
-  };
+  }, [endpointId]);
 
   useEffect(() => {
     if (open && endpointId) {
       fetchCertificateChain();
       fetchEnhancedDomainInfo();
     }
-  }, [open, endpointId]);
+  }, [open, endpointId, fetchCertificateChain, fetchEnhancedDomainInfo]);
 
   const handleClose = () => {
     setCertificateChain(null);
@@ -345,7 +345,7 @@ const CertificateModal: React.FC<CertificateModalProps> = ({
     );
   };
 
-  const getCertificateStatusIcon = (cert: CertificateInfo, isRoot: boolean) => {
+  const getCertificateStatusIcon = (cert: CertificateInfo) => {
     if (cert.daysRemaining <= 0) {
       return <ErrorIcon color="error" />;
     } else if (cert.daysRemaining <= 30) {
@@ -399,7 +399,7 @@ const CertificateModal: React.FC<CertificateModalProps> = ({
       <Accordion key={index} defaultExpanded={index === 0}>
         <AccordionSummary expandIcon={<ExpandMoreIcon />}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, width: '100%' }}>
-            {getCertificateStatusIcon(cert, isRootCert)}
+            {getCertificateStatusIcon(cert)}
             <Box sx={{ flexGrow: 1 }}>
               <Typography variant="h6" component="div">
                 {cert.subject}
@@ -423,7 +423,7 @@ const CertificateModal: React.FC<CertificateModalProps> = ({
                 Status
               </Typography>
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                {getCertificateStatusIcon(cert, isRootCert)}
+                {getCertificateStatusIcon(cert)}
                 <Typography variant="body2">
                   {cert.daysRemaining > 0
                     ? `Valid for ${cert.daysRemaining} more days`

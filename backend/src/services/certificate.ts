@@ -33,11 +33,6 @@ export interface CertificateError {
   code?: string;
 }
 
-interface ConnectionData {
-  hostname: string;
-  port: number;
-}
-
 export class CertificateService {
   constructor(private logger: LoggerService) {}
 
@@ -228,8 +223,6 @@ export class CertificateService {
         },
         
         socket: {
-          data: { hostname, port } as ConnectionData,
-          
           // Handle successful connection
           open(socket: any) {
             if (resolved) return;

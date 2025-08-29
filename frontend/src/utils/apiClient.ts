@@ -82,7 +82,7 @@ export const createApiHelpers = (apiClient: ReturnType<typeof createApiClient>) 
   get: (url: string, options?: ApiOptions) => 
     apiClient(url, { ...options, method: 'GET' }),
   
-  post: (url: string, data?: any, options?: ApiOptions) => 
+  post: (url: string, data?: unknown, options?: ApiOptions) => 
     apiClient(url, {
       ...options,
       method: 'POST',
@@ -93,7 +93,7 @@ export const createApiHelpers = (apiClient: ReturnType<typeof createApiClient>) 
       body: data ? JSON.stringify(data) : undefined,
     }),
   
-  put: (url: string, data?: any, options?: ApiOptions) => 
+  put: (url: string, data?: unknown, options?: ApiOptions) => 
     apiClient(url, {
       ...options,
       method: 'PUT',
@@ -104,7 +104,7 @@ export const createApiHelpers = (apiClient: ReturnType<typeof createApiClient>) 
       body: data ? JSON.stringify(data) : undefined,
     }),
   
-  patch: (url: string, data?: any, options?: ApiOptions) => 
+  patch: (url: string, data?: unknown, options?: ApiOptions) => 
     apiClient(url, {
       ...options,
       method: 'PATCH',
