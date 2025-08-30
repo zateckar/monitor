@@ -13,7 +13,6 @@ import {
   Chip,
   Paper,
   IconButton,
-  Grid,
   Alert,
   Checkbox,
   FormGroup,
@@ -53,7 +52,7 @@ const StatusPagesSettings: React.FC = () => {
       const response = await fetch('/api/status-pages');
       const data = await response.json();
       setStatusPages(data);
-    } catch (_err) {
+    } catch {
       setError('Failed to fetch status pages');
     }
   };
@@ -63,7 +62,7 @@ const StatusPagesSettings: React.FC = () => {
       const response = await fetch('/api/endpoints');
       const data = await response.json();
       setEndpoints(data);
-    } catch (_err) {
+    } catch {
       setError('Failed to fetch endpoints');
     }
   };

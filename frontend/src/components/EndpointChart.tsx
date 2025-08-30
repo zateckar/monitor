@@ -147,7 +147,7 @@ const EndpointChart = ({ endpointId, timeRange }: EndpointChartProps) => {
   const relevantOutages = getRelevantOutages(outages, data);
 
   // Transform outages to use numerical timestamps for ReferenceArea
-  const transformedOutages = relevantOutages.map((outage, index) => ({
+  const transformedOutages = relevantOutages.map((outage) => ({
     ...outage,
     startTimestamp: new Date(outage.started_at).getTime(),
     endTimestamp: outage.ended_at ? new Date(outage.ended_at).getTime() : Date.now()

@@ -80,7 +80,7 @@ export function validateUrl(url: string): ValidationResult {
     }
 
     return { isValid: true, sanitizedValue: url.trim() };
-  } catch (error) {
+  } catch {
     return { isValid: false, error: 'Invalid URL format' };
   }
 }
@@ -122,7 +122,7 @@ export function validateJson(jsonString: string, fieldName: string): ValidationR
   try {
     const parsed = JSON.parse(jsonString);
     return { isValid: true, sanitizedValue: parsed };
-  } catch (error) {
+  } catch {
     return { isValid: false, error: `Invalid JSON format in ${fieldName}` };
   }
 }

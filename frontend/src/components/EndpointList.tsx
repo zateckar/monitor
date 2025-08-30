@@ -38,7 +38,7 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy
 } from '@dnd-kit/sortable';
-import type { Endpoint, EndpointGroup, TreeNode } from '../types';
+import type { Endpoint, EndpointGroup } from '../types';
 import EndpointListItem from './EndpointListItem';
 import GroupingItem from './GroupingItem';
 
@@ -74,7 +74,7 @@ const EndpointList: React.FC<EndpointListProps> = ({
     mouseY: number;
     endpointId: string | number;
   } | null>(null);
-  const [activeId, setActiveId] = useState<string | number | null>(null);
+  const [, setActiveId] = useState<string | number | null>(null);
   
   const isInitialLoadRef = useRef<boolean>(true);
   const hasInitializedStateRef = useRef<boolean>(false);
@@ -341,7 +341,7 @@ const EndpointList: React.FC<EndpointListProps> = ({
               const newIndex = currentItems.findIndex(ep => ep.id === overId);
               
               if (oldIndex !== -1 && newIndex !== -1) {
-                const reorderedItems = arrayMove(currentItems, oldIndex, newIndex);
+                arrayMove(currentItems, oldIndex, newIndex);
                 
                 // Update the custom order to reflect the new arrangement
                 const newCustomOrder = [...customOrder];

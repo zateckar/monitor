@@ -3,7 +3,8 @@ export interface ApiOptions extends RequestInit {
 }
 
 export const apiClient = async (url: string, options: ApiOptions = {}): Promise<Response> => {
-  const { skipAuth = false, ...fetchOptions } = options;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { skipAuth: _skipAuth = false, ...fetchOptions } = options;
 
   // Always include credentials for cookie-based auth
   const requestOptions: RequestInit = {

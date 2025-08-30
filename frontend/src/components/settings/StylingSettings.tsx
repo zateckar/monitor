@@ -8,7 +8,6 @@ import {
   Switch,
   Button,
   Alert,
-  Grid,
   Paper,
   TextField,
   Chip,
@@ -163,8 +162,8 @@ const StylingSettings: React.FC = () => {
         </Alert>
       )}
 
-      <Grid container spacing={3}>
-        <Grid item xs={12} md={6}>
+      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 3 }}>
+        <Box sx={{ flex: 1 }}>
           <Card sx={{ mb: 3 }}>
             <CardContent>
               <Typography variant="h6" sx={{ mb: 2 }}>
@@ -217,9 +216,9 @@ const StylingSettings: React.FC = () => {
               </Paper>
             </CardContent>
           </Card>
-        </Grid>
+        </Box>
 
-        <Grid item xs={12} md={6}>
+        <Box sx={{ flex: 1 }}>
           <Typography variant="h6" sx={{ mb: 2 }}>
             Color Customization
           </Typography>
@@ -231,8 +230,8 @@ const StylingSettings: React.FC = () => {
               description={description}
             />
           ))}
-        </Grid>
-      </Grid>
+        </Box>
+      </Box>
 
       <Divider sx={{ my: 3 }} />
 

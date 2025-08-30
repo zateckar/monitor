@@ -37,7 +37,6 @@ async function build() {
       outdir: distDir,
       target: "browser",
       minify: true,
-      splitting: true,
       sourcemap: false,
       naming: {
         entry: "[dir]/[name]-[hash].[ext]",

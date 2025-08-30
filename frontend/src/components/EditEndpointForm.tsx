@@ -120,7 +120,7 @@ const EditEndpointForm: React.FC<EditEndpointFormProps> = ({ endpoint, onUpdate,
             const parsed = JSON.parse(endpoint.http_headers);
             // Convert object back to formatted JSON string for display
             parsedHeaders = JSON.stringify(parsed, null, 2);
-          } catch (e) {
+          } catch {
             // If parsing fails, use as-is (might already be a formatted string)
             parsedHeaders = endpoint.http_headers;
           }
@@ -141,7 +141,7 @@ const EditEndpointForm: React.FC<EditEndpointFormProps> = ({ endpoint, onUpdate,
           try {
             const parsed = JSON.parse(endpoint.ok_http_statuses);
             parsedStatuses = Array.isArray(parsed) ? parsed.join(',') : endpoint.ok_http_statuses;
-          } catch (e) {
+          } catch {
             parsedStatuses = endpoint.ok_http_statuses;
           }
         }
@@ -164,7 +164,7 @@ const EditEndpointForm: React.FC<EditEndpointFormProps> = ({ endpoint, onUpdate,
           try {
             const parsed = JSON.parse(endpoint.kafka_config);
             parsedKafkaConfig = JSON.stringify(parsed, null, 2);
-          } catch (e) {
+          } catch {
             parsedKafkaConfig = endpoint.kafka_config;
           }
         } else if (typeof endpoint.kafka_config === 'object') {
