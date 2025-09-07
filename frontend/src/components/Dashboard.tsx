@@ -69,7 +69,11 @@ const Dashboard: React.FC<DashboardProps> = ({ endpoints: providedEndpoints, isP
           if (!endpointsResponse.ok) {
             throw new Error('Failed to fetch endpoints');
           }
-          endpoints = await endpointsResponse.json();
+          const endpointsResult = await endpointsResponse.json();
+          if (!endpointsResult.success) {
+            throw new Error(endpointsResult.error || 'Failed to fetch endpoints');
+          }
+          endpoints = endpointsResult.data;
         }
 
         // Calculate aggregated stats
@@ -115,9 +119,32 @@ const Dashboard: React.FC<DashboardProps> = ({ endpoints: providedEndpoints, isP
         const outagePromises = endpoints.map(async (endpoint) => {
           if (typeof endpoint.id === 'number') {
             try {
+              console.log(`[DEBUG] Dashboard fetching outages for endpoint ${endpoint.id}`);
               const response = await fetch(`/api/endpoints/${endpoint.id}/outages?limit=10`);
+              console.log(`[DEBUG] Dashboard response status for endpoint ${endpoint.id}:`, response.status);
+              
               if (response.ok) {
-                const endpointOutages: Outage[] = await response.json();
+                const responseData = await response.json();
+                console.log(`[DEBUG] Dashboard raw response for endpoint ${endpoint.id}:`, responseData);
+                console.log(`[DEBUG] Dashboard responseData.data type:`, typeof responseData.data, Array.isArray(responseData.data));
+                
+                // Handle wrapped response format
+                const endpointOutages: Outage[] = (responseData.success && Array.isArray(responseData.data))
+                  ? responseData.data
+                  : Array.isArray(responseData)
+                    ? responseData
+                    : [];
+                    
+                console.log(`[DEBUG] Dashboard final outages for endpoint ${endpoint.id}:`, endpointOutages);
+                console.log(`[DEBUG] Dashboard endpointOutages type check:`, typeof endpointOutages, Array.isArray(endpointOutages));
+                
+                // Additional safety check before mapping
+                if (!Array.isArray(endpointOutages)) {
+                  console.error(`[ERROR] Dashboard endpointOutages is not an array for endpoint ${endpoint.id}:`, endpointOutages);
+                  return [];
+                }
+                
+                console.log(`[DEBUG] Dashboard about to map ${endpointOutages.length} outages for endpoint ${endpoint.id}`);
                 return endpointOutages.map(outage => ({
                   ...outage,
                   endpointName: endpoint.name,
@@ -132,12 +159,35 @@ const Dashboard: React.FC<DashboardProps> = ({ endpoints: providedEndpoints, isP
         });
 
         const allOutages = await Promise.all(outagePromises);
+        console.log(`[DEBUG] Dashboard allOutages before flattening:`, allOutages);
+        console.log(`[DEBUG] Dashboard allOutages type check:`, typeof allOutages, Array.isArray(allOutages));
+        
+        // Additional safety check before flattening
+        if (!Array.isArray(allOutages)) {
+          console.error(`[ERROR] Dashboard allOutages is not an array:`, allOutages);
+          setOutages([]);
+          return;
+        }
+        
+        console.log(`[DEBUG] Dashboard about to flatten ${allOutages.length} outage arrays`);
         const flattenedOutages = allOutages.flat();
+        console.log(`[DEBUG] Dashboard flattenedOutages:`, flattenedOutages);
+        console.log(`[DEBUG] Dashboard flattenedOutages type check:`, typeof flattenedOutages, Array.isArray(flattenedOutages));
+        
+        // Additional safety check before sorting
+        if (!Array.isArray(flattenedOutages)) {
+          console.error(`[ERROR] Dashboard flattenedOutages is not an array:`, flattenedOutages);
+          setOutages([]);
+          return;
+        }
         
         // Sort by most recent first and limit to 20
+        console.log(`[DEBUG] Dashboard about to sort ${flattenedOutages.length} outages`);
         const sortedOutages = flattenedOutages
           .sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())
           .slice(0, 20);
+        
+        console.log(`[DEBUG] Dashboard sortedOutages final result:`, sortedOutages);
 
         setOutages(sortedOutages);
       } catch (err) {
@@ -374,7 +424,7 @@ const Dashboard: React.FC<DashboardProps> = ({ endpoints: providedEndpoints, isP
             />
             <CardContent sx={{ pt: 0 }}>
               <List dense>
-                {stats.monitorsWithIssues.map((endpoint) => (
+                {(stats.monitorsWithIssues || []).map((endpoint) => (
                   <ListItem key={endpoint.id} divider>
                     <ListItemText
                       primary={
@@ -427,8 +477,8 @@ const Dashboard: React.FC<DashboardProps> = ({ endpoints: providedEndpoints, isP
               </Typography>
             ) : (
               <List dense>
-                {outages.map((outage, index) => (
-                  <ListItem key={index} divider={index < outages.length - 1}>
+                {(outages || []).map((outage, index) => (
+                  <ListItem key={index} divider={index < (outages || []).length - 1}>
                     <ListItemText
                       primary={
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>

@@ -61,13 +61,13 @@ const EndpointChart = ({ endpointId, timeRange }: EndpointChartProps) => {
       // Fetch response times, endpoint info, and outages
       Promise.all([
         fetch(`/api/endpoints/${endpointId}/response-times?range=${timeRange}`).then(res => res.json()),
-        fetch(`/api/endpoints`).then(res => res.json()).then((endpoints: Endpoint[]) => 
-          endpoints.find((e: Endpoint) => e.id === endpointId)
+        fetch(`/api/endpoints`).then(res => res.json()).then(response => 
+          response.data.find((e: Endpoint) => e.id === endpointId)
         ),
         fetch(`/api/endpoints/${endpointId}/outages?limit=100`).then(res => res.json())
       ]).then(([responseData, , outageData]) => {
-        setData(responseData);
-        setOutages(outageData);
+        setData(responseData.data);
+        setOutages(outageData.data || []);
       });
     };
 

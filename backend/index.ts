@@ -1,5 +1,7 @@
 import { Elysia } from 'elysia';
 import { cors } from '@elysiajs/cors';
+import { helmet } from 'elysia-helmet';
+import { rateLimit } from 'elysia-rate-limit';
 import path from 'path';
 import { Database } from 'bun:sqlite';
 import ping from 'ping';
@@ -23,12 +25,17 @@ import { LoggerService } from './src/services/logger';
 import { AuthService } from './src/services/auth';
 import { OIDCService } from './src/services/oidc';
 import { MonitoringService } from './src/services/monitoring';
+import { DistributedMonitoringService } from './src/services/distributed-monitoring';
 import { NotificationService } from './src/services/notifications';
 import { DatabaseService } from './src/services/database';
 import { StatusPageService } from './src/services/status-pages';
 import { StaticFileService } from './src/services/static-files';
 import { CertificateService } from './src/services/certificate';
 import { DomainInfoService } from './src/services/domain-info';
+import { ConfigurationService } from './src/services/configuration';
+import { SynchronizationService } from './src/services/synchronization';
+import { FailoverManager } from './src/services/failover';
+import { ServiceContainer } from './src/services/service-container';
 
 // Import route factories
 import { createAuthRoutes, createAuthMiddleware } from './src/routes/auth';
@@ -40,6 +47,7 @@ import { createStatusPageRoutes } from './src/routes/status-pages';
 import { createSystemRoutes } from './src/routes/system';
 import { createStaticRoutes } from './src/routes/static';
 import { createPreferencesRoutes } from './src/routes/preferences';
+import { createSyncRoutes } from './src/routes/sync';
 
 // Import utilities
 import { calculateGapAwareUptime } from './src/utils/uptime';
@@ -84,6 +92,9 @@ async function main() {
   const statusPageService = new StatusPageService(db, logger);
   const staticFileService = new StaticFileService();
   const notificationService = new NotificationService(db, logger);
+  const configService = new ConfigurationService(db, logger);
+  const syncService = new SynchronizationService(db, configService, logger);
+  const failoverManager = new FailoverManager(db, configService, syncService, logger);
   
   // Create send notification function for monitoring service
   const sendNotification = async (endpoint: Endpoint, status: string) => {
@@ -103,29 +114,88 @@ async function main() {
     sendNotification
   );
 
+  const distributedMonitoringService = new DistributedMonitoringService(
+    db,
+    logger,
+    kafkaService,
+    domainInfoService,
+    certificateService,
+    sendNotification,
+    configService,
+    syncService,
+    failoverManager
+  );
+
   logger.info('Starting Endpoint Monitor application', 'SYSTEM');
 
   // Create default admin user if no users exist
   await authService.createDefaultAdminUser();
 
+  // Create service container first (needed for auth middleware)
+  const tempServices = ServiceContainer.create(
+    db,
+    logger,
+    databaseService,
+    authService,
+    oidcService,
+    kafkaService,
+    notificationService,
+    domainInfoService,
+    certificateService,
+    statusPageService,
+    configService,
+    syncService,
+    failoverManager,
+    distributedMonitoringService
+  );
+
   // Create authentication middleware
-  const authMiddleware = createAuthMiddleware(authService);
+  const authMiddleware = createAuthMiddleware(tempServices);
   const { requireAuth, requireRole } = authMiddleware;
 
+  // Create service container
+  const services = ServiceContainer.create(
+    db,
+    logger,
+    databaseService,
+    authService,
+    oidcService,
+    kafkaService,
+    notificationService,
+    domainInfoService,
+    certificateService,
+    statusPageService,
+    configService,
+    syncService,
+    failoverManager,
+    distributedMonitoringService,
+    requireAuth,
+    requireRole
+  );
+
   // Create route instances
-  const authRoutes = createAuthRoutes(authService, logger);
-  const endpointsRoutes = createEndpointsRoutes(db, authService, logger, monitoringService, domainInfoService, certificateService, requireAuth, requireRole);
-  const oidcRoutes = createOIDCRoutes(db, oidcService, authService, logger, requireRole);
-  const userRoutes = createUserRoutes(db, authService, logger, requireRole);
-  const notificationRoutes = createNotificationRoutes(db, logger);
-  const statusPageRoutes = createStatusPageRoutes(statusPageService, logger, requireRole);
-  const systemRoutes = createSystemRoutes(db, databaseService, logger);
-  const preferencesRoutes = createPreferencesRoutes(db, requireRole);
+  const authRoutes = createAuthRoutes(services);
+  const endpointsRoutes = createEndpointsRoutes(services);
+  const oidcRoutes = createOIDCRoutes(services);
+  const userRoutes = createUserRoutes(services);
+  const notificationRoutes = createNotificationRoutes(services);
+  const statusPageRoutes = createStatusPageRoutes(services);
+  const systemRoutes = createSystemRoutes(services);
+  const preferencesRoutes = createPreferencesRoutes(services);
+  const syncRoutes = createSyncRoutes(services);
   const staticRoutes = createStaticRoutes(staticFileService);
 
   // Create main Elysia app
   const app = new Elysia()
-    .use(cors())
+    .use(cors({
+      origin: process.env.NODE_ENV === 'production' ? 'https://your-production-domain.com' : 'http://localhost:5173',
+      credentials: true,
+    }))
+    .use(helmet())
+    .use(rateLimit({
+      duration: 60 * 1000, // 1 minute
+      max: 100, // 100 requests per minute
+    }))
     .onRequest((context) => {
       // Ensure Content-Type is properly handled
       const contentType = context.request.headers.get('content-type');
@@ -143,9 +213,10 @@ async function main() {
     .use(statusPageRoutes)
     .use(systemRoutes)
     .use(preferencesRoutes)
+    .use(syncRoutes)
     // Static file routes must be last (catch-all)
     .use(staticRoutes)
-    .listen(3001);
+    .listen(process.env.PORT ? parseInt(process.env.PORT) : 3001);
 
   console.log(
     `🦊 Elysia is running at http://${app.server?.hostname}:${app.server?.port}`
@@ -154,15 +225,10 @@ async function main() {
   // Initialize monitoring for all existing endpoints
   const initializeMonitoring = async () => {
     try {
-      const endpoints: Endpoint[] = db.query('SELECT * FROM endpoints').all() as Endpoint[];
-      logger.info(`Starting monitoring for ${endpoints.length} endpoints`, 'MONITORING');
-      
-      for (const endpoint of endpoints) {
-        logger.info(`Starting monitor for "${endpoint.name}" (ID: ${endpoint.id}) with ${endpoint.heartbeat_interval || 60}s interval`, 'MONITORING');
-        monitoringService.startEndpointMonitoring(endpoint);
-      }
+      await distributedMonitoringService.initializeMonitoring();
+      logger.info('Distributed monitoring initialized', 'MONITORING');
     } catch (err) {
-      logger.error(`Error initializing monitoring: ${err}`, 'MONITORING');
+      logger.error(`Error initializing distributed monitoring: ${err}`, 'MONITORING');
     }
   };
 

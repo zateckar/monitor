@@ -1,159 +1,174 @@
 import { Elysia, t } from 'elysia';
 import type { User } from '../types';
-import { AuthService } from '../services/auth';
-import { LoggerService } from '../services/logger';
+import { ServiceContainer } from '../services/service-container';
+import { createAuthCookie } from '../utils/cookies';
+import { AUTH_LEVELS, createSuccessResponse, createErrorResponse, API_VERSIONS } from '../utils/auth-constants';
+import { RouteMetadataRegistry, RouteMeta } from '../utils/route-metadata';
+import { Errors, HTTP_STATUS } from '../utils/error-handler';
+import { VersionUtils } from '../utils/api-versioning';
 
-// Cookie helper function
-const serializeCookie = (name: string, value: string, options: {
-  httpOnly?: boolean;
-  secure?: boolean;
-  sameSite?: 'strict' | 'lax' | 'none';
-  maxAge?: number;
-  path?: string;
-} = {}): string => {
-  let cookie = `${name}=${value}`;
-  
-  if (options.httpOnly) cookie += '; HttpOnly';
-  if (options.secure) cookie += '; Secure';
-  if (options.sameSite) cookie += `; SameSite=${options.sameSite}`;
-  if (options.maxAge !== undefined) cookie += `; Max-Age=${options.maxAge}`;
-  if (options.path) cookie += `; Path=${options.path}`;
-  
-  return cookie;
-};
+/**
+ * Creates authentication routes with standardized patterns
+ * @param services Service container with all required dependencies
+ * @returns Elysia route handler for authentication
+ */
+export function createAuthRoutes(services: ServiceContainer) {
+   const { authService, logger } = services;
+   const registry = RouteMetadataRegistry.getInstance();
 
-// Environment-aware cookie configuration
-const isProduction = process.env.NODE_ENV === 'production';
+   return new Elysia({ prefix: '/api/auth' })
+     // === Authentication Routes ===
 
-// DRY helper for creating auth cookies
-const createAuthCookie = (token: string, maxAge?: number): string => {
-  return serializeCookie('auth_token', token, {
-    httpOnly: true,
-    secure: isProduction, // true in production, false in development
-    sameSite: 'lax',
-    maxAge: maxAge ?? 7 * 24 * 60 * 60, // Default 7 days
-    path: '/'
-  });
-};
+     /**
+      * Authenticate user and generate JWT token
+      * @param body.username - User's username
+      * @param body.password - User's password
+      * @returns User data and JWT token
+      */
+     .post('/login', async ({ body, set, request }) => {
+      try {
+        const { username, password } = body;
 
-export function createAuthRoutes(authService: AuthService, logger: LoggerService) {
-  return new Elysia({ prefix: '/api/auth' })
-    .post('/login', async ({ body, set, request }) => {
-      const { username, password } = body;
+        // Get user from database
+        const user = authService.getUserByUsername(username);
 
-      // Get user from database
-      const user = authService.getUserByUsername(username);
+        if (!user || !user.password_hash) {
+          throw Errors.authentication('Invalid credentials');
+        }
 
-      if (!user || !user.password_hash) {
-        set.status = 401;
-        return { error: 'Invalid credentials' };
+        // Verify password
+        const passwordValid = await authService.verifyPassword(password, user.password_hash);
+        if (!passwordValid) {
+          throw Errors.authentication('Invalid credentials');
+        }
+
+        // Update last login
+        authService.updateUserLastLogin(user.id);
+
+        // Generate 7-day token
+        const token = authService.generateToken(user);
+
+        // Set HTTP-only cookie
+        const authCookie = createAuthCookie(token);
+        set.headers['Set-Cookie'] = authCookie;
+
+        logger.info(`User "${username}" logged in successfully`, 'AUTH');
+
+        // Register route metadata
+        registry.register('/login', RouteMeta.public('User login', ['auth', 'login']));
+
+        return createSuccessResponse({
+          user: {
+            id: user.id,
+            username: user.username,
+            email: user.email,
+            role: user.role,
+            created_at: user.created_at
+          },
+          token
+        });
+      } catch (error: any) {
+        logger.error(`Login failed for user "${body.username}": ${error.message}`, 'AUTH');
+        throw error; // Let global error handler deal with it
       }
-
-      // Verify password
-      const passwordValid = await authService.verifyPassword(password, user.password_hash);
-      if (!passwordValid) {
-        set.status = 401;
-        return { error: 'Invalid credentials' };
-      }
-
-      // Update last login
-      authService.updateUserLastLogin(user.id);
-
-      // Generate 7-day token
-      const token = authService.generateToken(user);
-
-      // Set HTTP-only cookie
-      const authCookie = createAuthCookie(token);
-
-      set.headers['Set-Cookie'] = authCookie;
-
-      logger.info(`User "${username}" logged in successfully`, 'AUTH');
-
-      return {
-        success: true,
-        user: {
-          id: user.id,
-          username: user.username,
-          email: user.email,
-          role: user.role,
-          created_at: user.created_at
-        },
-        token
-      };
     }, {
       body: t.Object({
         username: t.String({ minLength: 1 }),
         password: t.String({ minLength: 1 })
       })
     })
+    /**
+     * Logout user by clearing authentication cookie
+     * @returns Success confirmation
+     */
     .post('/logout', async ({ set }) => {
-      // Clear cookie
-      const clearCookie = createAuthCookie('', 0);
+      try {
+        // Clear cookie
+        const clearCookie = createAuthCookie('', 0);
+        set.headers['Set-Cookie'] = clearCookie;
 
-      set.headers['Set-Cookie'] = clearCookie;
+        logger.info('User logged out', 'AUTH');
 
-      return { success: true };
+        // Register route metadata
+        registry.register('/logout', RouteMeta.user('User logout', ['auth', 'logout']));
+
+        return createSuccessResponse(null, 'Logged out successfully');
+      } catch (error: any) {
+        logger.error(`Logout failed: ${error.message}`, 'AUTH');
+        throw error;
+      }
     })
+    /**
+     * Get current authenticated user information
+     * @returns Current user profile data
+     */
     .get('/me', async ({ request, set }) => {
-      const user = await authService.authenticateUser(request);
-      if (!user) {
-        return new Response(JSON.stringify({ error: 'Authentication required' }), {
-          status: 401,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-
-      // Check if token should be renewed
-      const cookieHeader = request.headers.get('cookie');
-      let currentToken = null;
-      
-      if (cookieHeader) {
-        const cookies: Record<string, string> = {};
-        cookieHeader.split(';').forEach(cookie => {
-          const [name, ...rest] = cookie.trim().split('=');
-          if (name && rest.length > 0) {
-            cookies[name] = rest.join('=');
-          }
-        });
-        currentToken = cookies.auth_token || null;
-      }
-
-      if (currentToken) {
-        const decoded = authService.verifyToken(currentToken);
-        if (decoded && authService.shouldRenewToken(decoded)) {
-          // Generate new token and set new cookie
-          const newToken = authService.generateToken(user);
-          
-          const authCookie = createAuthCookie(newToken);
-
-          set.headers['Set-Cookie'] = authCookie;
-          
-          logger.info(`Token renewed for user "${user.username}"`, 'AUTH');
+      try {
+        const user = await authService.authenticateUser(request);
+        if (!user) {
+          throw Errors.authentication('Authentication required');
         }
-      }
 
-      return {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-        created_at: user.created_at,
-        last_login: user.last_login
-      };
+        // Check if token should be renewed
+        const cookieHeader = request.headers.get('cookie');
+        let currentToken = null;
+
+        if (cookieHeader) {
+          const cookies: Record<string, string> = {};
+          cookieHeader.split(';').forEach(cookie => {
+            const [name, ...rest] = cookie.trim().split('=');
+            if (name && rest.length > 0) {
+              cookies[name] = rest.join('=');
+            }
+          });
+          currentToken = cookies.auth_token || null;
+        }
+
+        if (currentToken) {
+          const decoded = authService.verifyToken(currentToken);
+          if (decoded && authService.shouldRenewToken(decoded)) {
+            // Generate new token and set new cookie
+            const newToken = authService.generateToken(user);
+            const authCookie = createAuthCookie(newToken);
+            set.headers['Set-Cookie'] = authCookie;
+
+            logger.info(`Token renewed for user "${user.username}"`, 'AUTH');
+          }
+        }
+
+        // Register route metadata
+        registry.register('/me', RouteMeta.user('Get current user info', ['auth', 'profile']));
+
+        return createSuccessResponse({
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          role: user.role,
+          created_at: user.created_at,
+          last_login: user.last_login
+        });
+      } catch (error: any) {
+        logger.error(`Failed to get user info: ${error.message}`, 'AUTH');
+        throw error;
+      }
     });
 }
 
-// Middleware factory for authentication
-export function createAuthMiddleware(authService: AuthService) {
+/**
+ * Creates authentication middleware
+ * @param services Service container with all required dependencies
+ * @returns Authentication middleware functions
+ */
+export function createAuthMiddleware(services: ServiceContainer) {
+  const { authService, logger } = services;
+
   return {
     requireAuth: (handler: any) => {
       return async (context: any) => {
         const user = await authService.authenticateUser(context.request);
         if (!user) {
-          return new Response(JSON.stringify({ error: 'Authentication required' }), {
-            status: 401,
-            headers: { 'Content-Type': 'application/json' }
-          });
+          context.set.status = 401;
+          return createErrorResponse('Authentication required');
         }
         context.user = user;
         return handler(context);
@@ -164,18 +179,29 @@ export function createAuthMiddleware(authService: AuthService) {
       return (handler: any) => {
         return async (context: any) => {
           const user = await authService.authenticateUser(context.request);
+
           if (!user) {
-            return new Response(JSON.stringify({ error: 'Authentication required' }), {
-              status: 401,
-              headers: { 'Content-Type': 'application/json' }
-            });
+            logger.warn(`Authentication failed for ${context.request.method} ${context.request.url}`, 'AUTH');
+            context.set.status = 401;
+            return createErrorResponse('Authentication required');
           }
-          if (user.role !== role && role === 'admin') {
-            return new Response(JSON.stringify({ error: 'Admin access required' }), {
-              status: 403,
-              headers: { 'Content-Type': 'application/json' }
-            });
+
+          const isAllowed = (userRole: string, requiredRole: string) => {
+            if (requiredRole === 'admin') {
+              return userRole === 'admin';
+            }
+            if (requiredRole === 'user') {
+              return userRole === 'user' || userRole === 'admin';
+            }
+            return false;
+          };
+
+          if (!isAllowed(user.role, role)) {
+            logger.warn(`Access denied for user "${user.username}" with role "${user.role}" for required role "${role}"`, 'AUTH');
+            context.set.status = 403;
+            return createErrorResponse('Insufficient permissions');
           }
+
           context.user = user;
           return handler(context);
         };

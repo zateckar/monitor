@@ -52,7 +52,7 @@ const OIDCSettings: React.FC = () => {
 
   const fetchProviders = async () => {
     try {
-      const response = await fetch('/api/admin/oidc-providers', {
+      const response = await fetch('/api/auth/admin/oidc-providers', {
         credentials: 'include',
       });
       
@@ -60,7 +60,8 @@ const OIDCSettings: React.FC = () => {
         const data = await response.json();
         setProviders(data);
       } else {
-        setError('Failed to fetch OIDC providers');
+        const errorData = await response.json();
+        setError(errorData.error || 'Failed to fetch OIDC providers');
       }
     } catch (err) {
       console.error(err);
@@ -115,8 +116,8 @@ const OIDCSettings: React.FC = () => {
   const handleSave = async () => {
     try {
       const url = editingProvider
-        ? `/api/admin/oidc-providers/${editingProvider.id}`
-        : '/api/admin/oidc-providers';
+        ? `/api/auth/admin/oidc-providers/${editingProvider.id}`
+        : '/api/auth/admin/oidc-providers';
       
       const method = editingProvider ? 'PUT' : 'POST';
       
@@ -149,7 +150,7 @@ const OIDCSettings: React.FC = () => {
     }
 
     try {
-      const response = await fetch(`/api/admin/oidc-providers/${provider.id}`, {
+      const response = await fetch(`/api/auth/admin/oidc-providers/${provider.id}`, {
         method: 'DELETE',
         credentials: 'include',
       });

@@ -4,6 +4,7 @@ A comprehensive endpoint monitoring application built with Bun, Elysia, React, a
 
 ## Features
 - **Multi-Protocol Monitoring**: HTTP/HTTPS, Ping, TCP, Kafka (Producer/Consumer)
+- **Distributed Monitoring**: Primary/dependent instance architecture with automatic failover
 - **Authentication**: Local users + OIDC/OAuth2 support
 - **Real-time Alerts**: Telegram, Email (SendGrid), Slack, Apprise
 - **SSL Certificate Monitoring**: Track certificate expiration
@@ -11,6 +12,8 @@ A comprehensive endpoint monitoring application built with Bun, Elysia, React, a
 - **Status Pages**: Public status pages for your services
 - **Advanced Analytics**: Gap-aware uptime calculations, response time tracking
 - **User Management**: Role-based access control (Admin/User)
+- **Multi-Location Monitoring**: Geographic monitoring with consensus status
+- **High Availability**: Automatic failover and instance health monitoring
 
 ## Tech Stack
 - **Runtime**: Bun (replace Node.js/npm for all operations)
@@ -20,11 +23,11 @@ A comprehensive endpoint monitoring application built with Bun, Elysia, React, a
 - **Bundling**: Bun for both frontend and backend
 
 ## Common Commands
-```bash
-bun start                    # Start full application on http://localhost:3001
+bun dev                     # Start applicatzion with hot-reload. Frontend on http://localhost:5174, backend on http://localhost:3001
+bun start                   # Start full application. Frontend and backend on http://localhost:3001
 bun add <package>           # Add dependency
 bun add -d <package>        # Add dev dependency
-```
+
 
 ## Key Architecture Points
 - **Service-oriented backend** with clean separation between monitoring, auth, notifications

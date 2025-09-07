@@ -8,6 +8,7 @@ import EndpointDetail from './components/EndpointDetail';
 import Settings from './components/Settings';
 import StatusPage from './components/StatusPage';
 import LoginPage from './components/LoginPage';
+import InstanceHealthDashboard from './components/InstanceHealthDashboard';
 import type { Endpoint } from './types';
 import { updateFavicon, checkMonitorStatus } from './utils/favicon';
 
@@ -136,6 +137,7 @@ function MainApp() {
   const [showSettings, setShowSettings] = useState(false);
   const [isCreatingNewMonitor, setIsCreatingNewMonitor] = useState(false);
   const [isEditingMonitor, setIsEditingMonitor] = useState(false);
+  const [currentView, setCurrentView] = useState<'endpoints' | 'health'>('endpoints');
   const { user } = useAuth();
 
   const fetchData = useCallback(() => {
@@ -144,20 +146,37 @@ function MainApp() {
       return;
     }
 
+    console.log('[DEBUG] Fetching endpoints data...');
     fetch('/api/endpoints')
-      .then((res) => res.json())
-      .then((data) => {
-        setEndpoints(data);
+      .then((res) => {
+        console.log('[DEBUG] Endpoints response status:', res.status, res.ok);
+        return res.json();
+      })
+      .then((response) => {
+        console.log('[DEBUG] Endpoints response:', response);
+        console.log('[DEBUG] Response.data type:', typeof response.data);
+        console.log('[DEBUG] Response.data isArray:', Array.isArray(response.data));
+        console.log('[DEBUG] Response.data value:', response.data);
+        
+        const endpoints = response.data; // Extract endpoints array from response wrapper
+        
+        if (!Array.isArray(endpoints)) {
+          console.error('[DEBUG] Expected endpoints to be array, got:', typeof endpoints, endpoints);
+          setEndpoints([]);
+          return;
+        }
+        
+        setEndpoints(endpoints);
         // Update selected endpoint if it exists in the new data
         setSelectedEndpoint(prev => {
           if (prev) {
-            // For newly created endpoints (that might have just received a real ID), 
+            // For newly created endpoints (that might have just received a real ID),
             // try to find by name and URL if ID lookup fails
-            let updatedSelected = data.find((e: Endpoint) => e.id === prev.id);
+            let updatedSelected = endpoints.find((e: Endpoint) => e.id === prev.id);
             
             if (!updatedSelected && typeof prev.id === 'string' && prev.id.startsWith('temp-')) {
               // If the previous endpoint was a temp one, find by name and URL
-              updatedSelected = data.find((e: Endpoint) => 
+              updatedSelected = endpoints.find((e: Endpoint) =>
                 e.name === prev.name && e.url === prev.url
               );
             }
@@ -262,7 +281,8 @@ function MainApp() {
         if (!res.ok) {
           throw new Error(`Server responded with ${res.status}: ${await res.text()}`);
         }
-        const newEndpointWithId = await res.json();
+        const response = await res.json();
+        const newEndpointWithId = response.data; // Extract endpoint from response wrapper
 
         // Replace the temporary endpoint with the real one from the server response
         setEndpoints(prevEndpoints =>
@@ -288,7 +308,8 @@ function MainApp() {
         if (!res.ok) {
           throw new Error(`Server responded with ${res.status}: ${await res.text()}`);
         }
-        const updatedEndpoint = await res.json();
+        const response = await res.json();
+        const updatedEndpoint = response.data; // Extract endpoint from response wrapper
         setEndpoints(
           endpoints.map((e) => (e.id === updatedEndpoint.id ? updatedEndpoint : e))
         );
@@ -327,20 +348,30 @@ function MainApp() {
     }
   };
 
+  const handleViewChange = (view: 'endpoints' | 'health') => {
+    setCurrentView(view);
+    // Clear selected endpoint when switching to health view
+    if (view === 'health') {
+      setSelectedEndpoint(null);
+    }
+  };
+
   return (
     <>
       <Layout
         showSettings={showSettings}
         setShowSettings={setShowSettings}
-        master={
-          <Box sx={{ 
-            display: 'flex', 
-            flexDirection: 'column', 
+        currentView={currentView}
+        onViewChange={handleViewChange}
+        master={currentView === 'endpoints' ? (
+          <Box sx={{
+            display: 'flex',
+            flexDirection: 'column',
             height: '100%',
             overflow: 'hidden'
           }}>
-            <Box sx={{ 
-              flexGrow: 1, 
+            <Box sx={{
+              flexGrow: 1,
               overflow: 'auto',
               minHeight: 0
             }}>
@@ -353,10 +384,10 @@ function MainApp() {
               />
             </Box>
           </Box>
-        }
-        detail={
-          <Box sx={{ 
-            height: '100%', 
+        ) : undefined}
+        detail={currentView === 'endpoints' ? (
+          <Box sx={{
+            height: '100%',
             overflow: 'auto',
             display: 'flex',
             flexDirection: 'column'
@@ -374,11 +405,14 @@ function MainApp() {
                 isPaused={isCreatingNewMonitor || isEditingMonitor}
               />
           </Box>
-        }
+        ) : undefined}
+        fullContent={currentView === 'health' ? (
+          <InstanceHealthDashboard />
+        ) : undefined}
       />
-      <Settings 
-        open={showSettings} 
-        onClose={() => setShowSettings(false)} 
+      <Settings
+        open={showSettings}
+        onClose={() => setShowSettings(false)}
       />
     </>
   );

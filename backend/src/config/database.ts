@@ -216,6 +216,113 @@ function createTables(db: Database): void {
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
+  // Distributed monitoring tables
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS monitoring_instances (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      instance_id TEXT UNIQUE NOT NULL,
+      instance_name TEXT NOT NULL,
+      location TEXT,
+      sync_url TEXT,
+      failover_order INTEGER DEFAULT 99,
+      last_heartbeat DATETIME,
+      status TEXT DEFAULT 'active',
+      capabilities TEXT,
+      system_info TEXT,
+      connection_info TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS instance_config (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      description TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS endpoint_sync_status (
+      endpoint_id INTEGER,
+      instance_id TEXT,
+      last_synced DATETIME,
+      config_hash TEXT,
+      sync_version INTEGER DEFAULT 1,
+      status TEXT DEFAULT 'pending',
+      error_message TEXT,
+      PRIMARY KEY (endpoint_id, instance_id),
+      FOREIGN KEY(endpoint_id) REFERENCES endpoints(id) ON DELETE CASCADE
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS aggregated_results (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      endpoint_id INTEGER,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      total_locations INTEGER,
+      successful_locations INTEGER,
+      avg_response_time REAL,
+      min_response_time INTEGER,
+      max_response_time INTEGER,
+      consensus_status TEXT,
+      location_results TEXT,
+      FOREIGN KEY(endpoint_id) REFERENCES endpoints(id) ON DELETE CASCADE
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS monitoring_results (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      endpoint_id INTEGER NOT NULL,
+      instance_id TEXT NOT NULL,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      is_ok BOOLEAN NOT NULL,
+      response_time INTEGER,
+      status TEXT NOT NULL,
+      failure_reason TEXT,
+      location TEXT,
+      check_type TEXT,
+      metadata TEXT,
+      FOREIGN KEY(endpoint_id) REFERENCES endpoints(id) ON DELETE CASCADE
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS instance_tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      instance_id TEXT UNIQUE NOT NULL,
+      token_hash TEXT NOT NULL,
+      expires_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_used DATETIME,
+      permissions TEXT,
+      FOREIGN KEY(instance_id) REFERENCES monitoring_instances(instance_id) ON DELETE CASCADE
+    )
+  `);
+
+  // Outages table for tracking endpoint downtime periods
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS outages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      endpoint_id INTEGER NOT NULL,
+      started_at DATETIME NOT NULL,
+      ended_at DATETIME,
+      reason TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(endpoint_id) REFERENCES endpoints(id) ON DELETE CASCADE
+    )
+  `);
+
+  // Create index for efficient outage queries
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_outages_endpoint_started
+    ON outages(endpoint_id, started_at DESC)
+  `);
 }
 
 function runMigrations(db: Database): void {
@@ -253,9 +360,31 @@ function runMigrations(db: Database): void {
     'ALTER TABLE endpoints ADD COLUMN domain_creation_date DATETIME',
     'ALTER TABLE endpoints ADD COLUMN domain_updated_date DATETIME',
     'ALTER TABLE response_times ADD COLUMN failure_reason TEXT',
+    'ALTER TABLE response_times ADD COLUMN instance_id TEXT DEFAULT \'local\'',
+    'ALTER TABLE response_times ADD COLUMN location TEXT DEFAULT \'local\'',
+    'ALTER TABLE response_times ADD COLUMN check_metadata TEXT',
     'ALTER TABLE users ADD COLUMN last_activity DATETIME',
     'ALTER TABLE refresh_tokens ADD COLUMN extended_at DATETIME'
   ];
+
+  // Create outages table for existing databases that don't have it
+  const outagesTableMigrations = [
+    `CREATE TABLE IF NOT EXISTS outages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      endpoint_id INTEGER NOT NULL,
+      started_at DATETIME NOT NULL,
+      ended_at DATETIME,
+      reason TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(endpoint_id) REFERENCES endpoints(id) ON DELETE CASCADE
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_outages_endpoint_started
+     ON outages(endpoint_id, started_at DESC)`
+  ];
+
+  // Add outages table migrations to main migrations array
+  migrations.push(...outagesTableMigrations);
 
   console.log('Running database migrations...');
 

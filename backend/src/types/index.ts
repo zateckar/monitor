@@ -76,4 +76,135 @@ export interface Endpoint {
   kafka_config?: string; // For consumer/producer specific configs
   kafka_consumer_read_single?: boolean; // For consumer: read only one message
   kafka_consumer_auto_commit?: boolean; // For consumer: enable/disable autocommit
+
+  // Domain information monitoring
+  domain_expires_in?: number | null;
+  domain_expiry_date?: string | null;
+  domain_creation_date?: string | null;
+  domain_updated_date?: string | null;
+}
+
+// Distributed monitoring types
+export interface InstanceConfig {
+  // Instance Identity
+  instanceName: string;
+  instanceLocation?: string;
+
+  // Security Settings
+  sharedSecret?: string;
+
+  // Dependent Instance Settings
+  primarySyncURL?: string;
+  failoverOrder?: number;
+
+  // Connection Settings
+  syncInterval?: number;
+  heartbeatInterval?: number;
+  connectionTimeout?: number;
+}
+
+export interface MonitoringInstance {
+  id: number;
+  instance_id: string;
+  instance_name: string;
+  location?: string;
+  sync_url?: string;
+  failover_order: number;
+  last_heartbeat?: string;
+  status: 'active' | 'inactive' | 'failed' | 'promoting';
+  capabilities?: string[];
+  system_info?: SystemInfo;
+  connection_info?: ConnectionInfo;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SystemInfo {
+  platform: string;
+  arch: string;
+  nodeVersion: string;
+  memory: number;
+  cpu: number;
+  uptime: number;
+}
+
+export interface ConnectionInfo {
+  primaryReachable: boolean;
+  lastSyncSuccess?: string;
+  syncErrors: number;
+  latency?: number;
+}
+
+export interface InstanceRegistration {
+  instanceId: string;
+  instanceName: string;
+  location?: string;
+  version: string;
+  capabilities: string[];
+  failoverOrder: number;
+  publicEndpoint?: string;
+  systemInfo: SystemInfo;
+}
+
+export interface HeartbeatPayload {
+  instanceId: string;
+  timestamp: string;
+  status: 'healthy' | 'degraded' | 'failing';
+  uptime: number;
+  monitoringResults: MonitoringResult[];
+  systemMetrics: {
+    cpuUsage: number;
+    memoryUsage: number;
+    diskUsage: number;
+    activeEndpoints: number;
+  };
+  connectionStatus: ConnectionInfo;
+}
+
+export interface MonitoringResult {
+  endpointId: number;
+  instanceId: string;
+  timestamp: string;
+  isOk: boolean;
+  responseTime: number;
+  status: 'UP' | 'DOWN';
+  failureReason?: string;
+  location: string;
+  checkType: MonitorType;
+  metadata?: {
+    httpStatus?: number;
+    certificateInfo?: any;
+    kafkaMetrics?: any;
+  };
+}
+
+export interface SyncConfiguration {
+  endpoints: Endpoint[];
+  notificationServices: any[];
+  globalSettings: any;
+  lastModified: string;
+  configVersion: number;
+}
+
+export interface AggregatedResult {
+  id: number;
+  endpoint_id: number;
+  timestamp: string;
+  total_locations: number;
+  successful_locations: number;
+  avg_response_time: number;
+  min_response_time: number;
+  max_response_time: number;
+  consensus_status: 'UP' | 'DOWN' | 'PARTIAL';
+  location_results: Record<string, MonitoringResult>;
+}
+
+export interface InstanceToken {
+  id: number;
+  instance_id: string;
+  token_hash: string;
+  expires_at?: string;
+  created_at: string;
+  last_used?: string;
+  permissions: string[];
 }

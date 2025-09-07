@@ -30,6 +30,14 @@ This endpoint monitoring application addresses the critical need for reliable, r
 - **Problem**: Customers want visibility into service status
 - **Solution**: Public status pages for external communication
 
+### Geographic Monitoring Coverage
+- **Problem**: Single location monitoring doesn't reflect global service availability
+- **Solution**: Multi-location monitoring with consensus status determination
+
+### High Availability Requirements
+- **Problem**: Single monitoring instance creates a single point of failure
+- **Solution**: Automatic failover and distributed monitoring architecture
+
 ## How It Should Work
 
 ### Core Monitoring Flow
@@ -37,8 +45,9 @@ This endpoint monitoring application addresses the critical need for reliable, r
 2. **Continuous Checking**: System performs regular health checks based on configured intervals
 3. **Status Evaluation**: Results are processed considering upside-down mode and retry logic
 4. **Data Storage**: Response times, statuses, and metadata are stored for analysis
-5. **Notification Dispatch**: Configured notification services are triggered on status changes
-6. **Real-time Display**: Status and metrics are displayed in real-time dashboards
+5. **Distributed Aggregation**: Results from multiple geographic locations are aggregated with consensus status
+6. **Notification Dispatch**: Configured notification services are triggered on status changes
+7. **Real-time Display**: Status and metrics are displayed in real-time dashboards with multi-location support
 
 ### User Experience Goals
 

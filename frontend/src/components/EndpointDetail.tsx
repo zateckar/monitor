@@ -9,6 +9,7 @@ import EndpointStats from './EndpointStats';
 import EditEndpointForm from './EditEndpointForm';
 import OutageHistory from './OutageHistory';
 import HeartbeatVisualization from './HeartbeatVisualization';
+import MultiLocationStatus from './MultiLocationStatus';
 import Dashboard from './Dashboard';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { Pause, PlayArrow } from '@mui/icons-material';
@@ -19,6 +20,7 @@ import HistoryIcon from '@mui/icons-material/History';
 import DataUsageIcon from '@mui/icons-material/DataUsage';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
+import PublicIcon from '@mui/icons-material/Public';
 
 
 interface EndpointDetailProps {
@@ -61,13 +63,13 @@ const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, endpoints, on
 
   useEffect(() => {
     if (endpoint && typeof endpoint.id === 'number') {
-      fetch('/api/notification-services')
+      fetch('/api/notifications/notification-services')
         .then(res => res.json())
-        .then(setAllServices);
+        .then(response => setAllServices(response.data));
 
-      fetch(`/api/endpoints/${endpoint.id}/notification-services`)
+      fetch(`/api/notifications/endpoints/${endpoint.id}/notification-services`)
         .then(res => res.json())
-        .then(setLinkedServices);
+        .then(response => setLinkedServices(response.data));
     }
   }, [endpoint]);
 
@@ -83,7 +85,7 @@ const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, endpoints, on
 
   const handleAddService = async () => {
     if (!endpoint || !selectedService) return;
-    await fetch(`/api/endpoints/${endpoint.id}/notification-services`, {
+    await fetch(`/api/notifications/endpoints/${endpoint.id}/notification-services`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ serviceId: selectedService }),
@@ -97,7 +99,7 @@ const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, endpoints, on
 
   const handleRemoveService = async (serviceId: number) => {
     if (!endpoint) return;
-    await fetch(`/api/endpoints/${endpoint.id}/notification-services/${serviceId}`, {
+    await fetch(`/api/notifications/endpoints/${endpoint.id}/notification-services/${serviceId}`, {
       method: 'DELETE',
     });
     setLinkedServices(linkedServices.filter(s => s.id !== serviceId));
@@ -224,6 +226,28 @@ const EndpointDetail: React.FC<EndpointDetailProps> = ({ endpoint, endpoints, on
                 endpointId={endpoint.id} 
                 size="medium" 
                 maxCount={150}
+              />
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Multi-Location Status Card */}
+        {typeof endpoint.id === 'number' && (
+          <Card elevation={2}>
+            <CardHeader
+              title={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <PublicIcon color="primary" />
+                  <Typography variant="h6">Multi-Location Monitoring</Typography>
+                </Box>
+              }
+            />
+            <CardContent sx={{ pt: 0 }}>
+              <MultiLocationStatus
+                endpointId={endpoint.id}
+                size="large"
+                isExpanded={true}
+                showLocationDetails={true}
               />
             </CardContent>
           </Card>

@@ -1,41 +1,9 @@
-import { Elysia } from 'elysia';
+import { Elysia, t } from 'elysia';
 import * as openidClient from 'openid-client';
-import { Database } from 'bun:sqlite';
-import { OIDCService } from '../services/oidc';
-import { AuthService } from '../services/auth';
-import { LoggerService } from '../services/logger';
-
-// Cookie helper functions
-const parseCookie = (cookieString: string): Record<string, string> => {
-  const cookies: Record<string, string> = {};
-  if (!cookieString) return cookies;
-  
-  cookieString.split(';').forEach(cookie => {
-    const [name, ...rest] = cookie.trim().split('=');
-    if (name && rest.length > 0) {
-      cookies[name] = rest.join('=');
-    }
-  });
-  return cookies;
-};
-
-const serializeCookie = (name: string, value: string, options: {
-  httpOnly?: boolean;
-  secure?: boolean;
-  sameSite?: 'strict' | 'lax' | 'none';
-  maxAge?: number;
-  path?: string;
-} = {}): string => {
-  let cookie = `${name}=${value}`;
-  
-  if (options.httpOnly) cookie += '; HttpOnly';
-  if (options.secure) cookie += '; Secure';
-  if (options.sameSite) cookie += `; SameSite=${options.sameSite}`;
-  if (options.maxAge !== undefined) cookie += `; Max-Age=${options.maxAge}`;
-  if (options.path) cookie += `; Path=${options.path}`;
-  
-  return cookie;
-};
+import { ServiceContainer } from '../services/service-container';
+import { parseCookie, serializeCookie, getCookieSecuritySettings } from '../utils/cookies';
+import { createSuccessResponse, createErrorResponse } from '../utils/auth-constants';
+import { validateUrl, validateAndSanitizeText, MAX_LENGTHS } from '../utils/validation';
 
 // Environment-aware configuration
 const isProduction = process.env.NODE_ENV === 'production';
@@ -44,37 +12,32 @@ const getProductionDomain = (): string => {
   return process.env.PRODUCTION_DOMAIN || 'https://monitor.example.com';
 };
 
-// Cookie security settings based on environment
-const getCookieSecuritySettings = (forceSecure?: boolean) => {
-  const shouldBeSecure = forceSecure || isProduction;
-  return {
-    httpOnly: true,
-    secure: shouldBeSecure,
-    sameSite: 'lax' as const,
-    path: '/'
-  };
-};
+/**
+ * Creates OIDC authentication routes
+ * @param services Service container with all required dependencies
+ * @returns Elysia route handler for OIDC authentication
+ */
+export function createOIDCRoutes(services: ServiceContainer) {
+  const { db, oidcService, authService, logger, requireRole } = services;
+  return new Elysia({ prefix: '/api/auth' })
 
-export function createOIDCRoutes(
-  db: Database,
-  oidcService: OIDCService,
-  authService: AuthService,
-  logger: LoggerService,
-  requireRole: (role: 'admin' | 'user') => (handler: any) => any
-) {
-  return new Elysia({ prefix: '/api' })
-    // Public OIDC endpoints
-    .get('/auth/oidc/providers', async () => {
+    // === Public OIDC Authentication ===
+
+    /**
+     * Get available OIDC providers
+     * @returns List of configured OIDC providers
+     */
+    .get('/oidc/providers', async () => {
       return oidcService.getProviders();
     })
-    .get('/auth/oidc/login/:providerId', async ({ params, set }) => {
+    .get('/oidc/login/:providerId', async ({ params, set }) => {
       const { providerId } = params;
       
       // Get provider scopes and redirect URL
       const provider = db.query('SELECT scopes, redirect_base_url FROM oidc_providers WHERE id = ? AND is_active = 1').get(providerId) as any;
       if (!provider) {
         set.status = 404;
-        return { error: 'OIDC provider not found or inactive' };
+        return createErrorResponse('OIDC provider not found or inactive');
       }
 
       const scopes = provider.scopes || 'openid profile email';
@@ -89,14 +52,14 @@ export function createOIDCRoutes(
       if (isProduction && !isHTTPS(redirectBaseUrl)) {
         await logger.error(`Production redirect base URL must use HTTPS: ${redirectBaseUrl}`, 'OIDC');
         set.status = 500;
-        return { error: 'Production redirect base URL must use HTTPS' };
+        return createErrorResponse('Production redirect base URL must use HTTPS');
       }
 
       // Generate authorization URL using the new stateless method
       const authResult = await oidcService.generateAuthorizationUrl(parseInt(providerId), redirectBaseUrl, scopes);
       if (!authResult) {
         set.status = 500;
-        return { error: 'Failed to generate authorization URL' };
+        return createErrorResponse('Failed to generate authorization URL');
       }
 
       // Store session data in cookies with environment-aware security
@@ -119,7 +82,7 @@ export function createOIDCRoutes(
 
       return { authorization_url: authResult.authUrl };
     })
-    .get('/auth/oidc/callback/:providerId', async ({ params, query, set, request }) => {
+    .get('/oidc/callback/:providerId', async ({ params, query, set, request }) => {
       const { providerId } = params;
       const { code, error, error_description } = query as any;
 
@@ -153,8 +116,12 @@ export function createOIDCRoutes(
         let sessionData;
         try {
           sessionData = JSON.parse(oidcSessionCookie);
+          // Validate session data structure
+          if (typeof sessionData !== 'object' || !sessionData.provider_id || !sessionData.code_verifier) {
+            throw new Error('Invalid session data structure');
+          }
         } catch (e) {
-          await logger.error(`Invalid OIDC session data for provider ${providerId}`, 'OIDC');
+          await logger.error(`Invalid OIDC session data for provider ${providerId}: ${e}`, 'OIDC');
           set.status = 400;
           return { error: 'Invalid session data. Please restart the authentication process.' };
         }
@@ -241,7 +208,13 @@ export function createOIDCRoutes(
         return { error: 'Failed to exchange authorization code for tokens' };
       }
     })
-    // Admin OIDC Provider Management
+
+    // === Admin OIDC Provider Management ===
+
+    /**
+     * Get all OIDC providers
+     * @returns List of all configured OIDC providers
+     */
     .get('/admin/oidc-providers', requireRole('admin')(async () => {
       const providers = db.query('SELECT * FROM oidc_providers ORDER BY created_at DESC').all() as any[];
       return providers.map(provider => ({
@@ -277,6 +250,39 @@ export function createOIDCRoutes(
         });
       }
 
+      // Validate and sanitize inputs
+      const nameValidation = validateAndSanitizeText(name, MAX_LENGTHS.NAME, 'Name');
+      if (!nameValidation.isValid) {
+        return new Response(JSON.stringify({ error: nameValidation.error }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      const urlValidation = validateUrl(issuer_url);
+      if (!urlValidation.isValid) {
+        return new Response(JSON.stringify({ error: urlValidation.error }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      const clientIdValidation = validateAndSanitizeText(client_id, MAX_LENGTHS.API_KEY, 'Client ID');
+      if (!clientIdValidation.isValid) {
+        return new Response(JSON.stringify({ error: clientIdValidation.error }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      const clientSecretValidation = validateAndSanitizeText(client_secret, MAX_LENGTHS.API_KEY, 'Client Secret');
+      if (!clientSecretValidation.isValid) {
+        return new Response(JSON.stringify({ error: clientSecretValidation.error }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
       // Validate issuer URL by attempting to discover it
       const isValid = await oidcService.validateProviderConfig(issuer_url, client_id, client_secret);
       if (!isValid) {
@@ -300,7 +306,7 @@ export function createOIDCRoutes(
         });
       }
 
-      const result = db.run('INSERT INTO oidc_providers (name, issuer_url, client_id, client_secret, scopes, redirect_base_url, use_pkce, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [name, issuer_url, client_id, client_secret, scopes || 'openid profile email', finalRedirectBaseUrl, use_pkce !== false, true]);
+      const result = db.run('INSERT INTO oidc_providers (name, issuer_url, client_id, client_secret, scopes, redirect_base_url, use_pkce, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [nameValidation.sanitizedValue, urlValidation.sanitizedValue, clientIdValidation.sanitizedValue, clientSecretValidation.sanitizedValue, scopes || 'openid profile email', finalRedirectBaseUrl, use_pkce !== false, true]);
 
       const newProvider = db.query('SELECT * FROM oidc_providers WHERE id = ?').get(result.lastInsertRowid) as any;
       

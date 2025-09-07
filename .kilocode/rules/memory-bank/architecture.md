@@ -10,7 +10,7 @@ The endpoint monitoring application follows a modern full-stack architecture wit
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   Frontend      │────│    Backend      │────│   Database      │
 │   React + MUI   │    │   ElysiaJS      │    │   SQLite        │
-│   TypeScript    │    │   TypeScript    │    │   15+ Tables    │
+│   TypeScript    │    │   TypeScript    │    │   19 Tables     │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
          │                       │                       │
          │              ┌─────────────────┐             │
@@ -19,6 +19,31 @@ The endpoint monitoring application follows a modern full-stack architecture wit
                         │  (Background)   │
                         └─────────────────┘
 ```
+
+## Distributed Monitoring Architecture
+
+The system supports a primary/dependent instance architecture for distributed monitoring across multiple geographic locations:
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│ Primary Instance│────│ Dependent      │    │ Dependent      │
+│ (US-East)       │    │ Instance       │    │ Instance       │
+│ • Sync API      │    │ (EU-West)      │    │ (Asia-Pacific) │
+│ • Aggregation   │    │ • Heartbeat    │    │ • Heartbeat    │
+│ • Management    │    │ • Monitoring   │    │ • Monitoring   │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+         │                       │                       │
+         │              ┌─────────────────┐             │
+         │              │ Consensus       │             │
+         └──────────────│ Status          │─────────────┘
+                        │ Determination   │
+                        └─────────────────┘
+```
+
+### Instance Roles
+- **Primary Instance**: Manages configuration, aggregates results, handles notifications
+- **Dependent Instance**: Monitors endpoints locally, reports to primary via heartbeats
+- **Standalone Instance**: Operates independently without distributed features
 
 ## Backend Architecture
 
@@ -40,6 +65,9 @@ backend/
 │   ├── services/              # Business logic layer
 │   │   ├── auth.ts            # Authentication service
 │   │   ├── monitoring.ts      # Core monitoring logic
+│   │   ├── distributed-monitoring.ts # Distributed monitoring orchestration
+│   │   ├── synchronization.ts # Instance-to-instance communication
+│   │   ├── failover.ts        # High availability and failover management
 │   │   ├── notifications.ts   # Notification dispatch
 │   │   ├── kafka.ts           # Kafka-specific monitoring
 │   │   ├── certificate.ts     # SSL certificate handling
@@ -58,7 +86,8 @@ backend/
 │   │   ├── status-pages.ts    # Status page management
 │   │   ├── preferences.ts     # User preferences
 │   │   ├── static.ts          # Static file routes
-│   │   └── system.ts          # System management
+│   │   ├── system.ts          # System management
+│   │   └── sync.ts            # Distributed monitoring sync routes
 │   └── utils/                 # Utility functions
 │       ├── validation.ts      # Input validation & sanitization
 │       ├── uptime.ts          # Gap-aware uptime calculations
@@ -77,18 +106,36 @@ backend/
    - Coordinates with notification system
    - Supports hot-reload for configuration changes
 
-2. **AuthService**: Authentication and authorization
+2. **DistributedMonitoringService**: Orchestrates distributed monitoring
+   - Manages primary/dependent instance roles
+   - Handles endpoint synchronization across instances
+   - Aggregates monitoring results from multiple locations
+   - Coordinates failover and high availability
+
+3. **SynchronizationService**: Manages instance-to-instance communication
+   - Handles instance registration and authentication
+   - Processes heartbeat data from dependent instances
+   - Manages endpoint configuration synchronization
+   - Provides sync API for distributed operations
+
+4. **FailoverManager**: Ensures high availability
+   - Monitors primary instance health
+   - Manages automatic failover to backup instances
+   - Coordinates instance promotion and demotion
+   - Maintains distributed system consistency
+
+5. **AuthService**: Authentication and authorization
    - JWT token management with automatic renewal
    - Password hashing with bcrypt
    - Role-based access control
    - Session management
 
-3. **NotificationService**: Multi-channel notifications
+6. **NotificationService**: Multi-channel notifications
    - Supports Telegram, SendGrid, Slack, and Apprise
    - Configurable per-endpoint notification routing
    - Template-based message formatting
 
-4. **KafkaService**: Kafka-specific monitoring
+7. **KafkaService**: Kafka-specific monitoring
    - Persistent connection management
    - Producer and consumer health checks
    - mTLS support for secure connections
@@ -105,6 +152,12 @@ backend/
 - **status_pages**: Public status page definitions
 - **application_logs**: Centralized logging
 - **user_preferences**: User-specific settings
+- **monitoring_instances**: Instance registry and management
+- **instance_config**: Instance-specific configuration
+- **endpoint_sync_status**: Endpoint synchronization tracking
+- **aggregated_results**: Aggregated monitoring results
+- **monitoring_results**: Instance-specific monitoring results
+- **instance_tokens**: Instance authentication tokens
 
 #### Key Design Patterns
 - **Gap-aware calculations**: Accounts for monitoring interruptions
@@ -137,12 +190,16 @@ frontend/
 │   │   ├── Settings.tsx      # Application settings
 │   │   ├── StatusPage.tsx    # Public status pages
 │   │   ├── LoginPage.tsx     # Authentication interface
+│   │   ├── MultiLocationStatus.tsx # Multi-location status display
+│   │   ├── InstanceHealthDashboard.tsx # Instance health monitoring
 │   │   └── settings/         # Settings components
 │   │       ├── NotificationSettings.tsx
 │   │       ├── UserManagement.tsx
 │   │       ├── OIDCSettings.tsx
 │   │       ├── TimezoneSettings.tsx
-│   │       └── StylingSettings.tsx
+│   │       ├── StylingSettings.tsx
+│   │       ├── DistributedMonitoringSettings.tsx
+│   │       └── FailoverConfigurationSettings.tsx
 │   ├── contexts/             # React Context providers
 │   │   └── AuthContext.tsx   # Authentication state
 │   └── utils/                # Utility functions

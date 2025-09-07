@@ -150,6 +150,10 @@ export interface DomainInfo {
   updatedDate: string | null;
   expiryDate: string | null;
   daysRemaining: number | null;
+  registrar: string | null;
+  status: string[];
+  domain: string | null;
+  tld: string | null;
 }
 
 export interface DnsInfo {
@@ -208,3 +212,84 @@ export interface EndpointGroup {
 }
 
 export type SortableItem = (Endpoint & { type: 'endpoint' }) | EndpointGroup;
+
+// Distributed monitoring types
+export interface InstanceConfig {
+  // Instance Identity
+  instanceName: string;
+  instanceLocation?: string;
+
+  // Security Settings
+  sharedSecret?: string;
+
+  // Dependent Instance Settings
+  primarySyncURL?: string;
+  failoverOrder?: number;
+
+  // Connection Settings
+  syncInterval?: number;
+  heartbeatInterval?: number;
+  connectionTimeout?: number;
+}
+
+export interface MonitoringInstance {
+  id: number;
+  instance_id: string;
+  instance_name: string;
+  location?: string;
+  sync_url?: string;
+  failover_order: number;
+  last_heartbeat?: string;
+  status: 'active' | 'inactive' | 'failed' | 'promoting';
+  capabilities?: string[];
+  system_info?: SystemInfo;
+  connection_info?: ConnectionInfo;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SystemInfo {
+  platform: string;
+  arch: string;
+  nodeVersion: string;
+  memory: number;
+  cpu: number;
+  uptime: number;
+}
+
+export interface ConnectionInfo {
+  primaryReachable: boolean;
+  lastSyncSuccess?: string;
+  syncErrors: number;
+  latency?: number;
+}
+
+export interface MonitoringResult {
+  endpointId: number;
+  instanceId: string;
+  timestamp: string;
+  isOk: boolean;
+  responseTime: number;
+  status: 'UP' | 'DOWN';
+  failureReason?: string;
+  location: string;
+  checkType: MonitorType;
+  metadata?: {
+    httpStatus?: number;
+    certificateInfo?: any;
+    kafkaMetrics?: any;
+  };
+}
+
+export interface AggregatedResult {
+  id: number;
+  endpoint_id: number;
+  timestamp: string;
+  total_locations: number;
+  successful_locations: number;
+  avg_response_time: number;
+  min_response_time: number;
+  max_response_time: number;
+  consensus_status: 'UP' | 'DOWN' | 'PARTIAL';
+  location_results: Record<string, MonitoringResult>;
+}

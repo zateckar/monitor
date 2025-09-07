@@ -50,8 +50,16 @@ const StatusPagesSettings: React.FC = () => {
   const fetchStatusPages = async () => {
     try {
       const response = await fetch('/api/status-pages');
-      const data = await response.json();
-      setStatusPages(data);
+      if (response.ok) {
+        const result = await response.json();
+        if (result.success) {
+          setStatusPages(result.data);
+        } else {
+          setError(result.error || 'Failed to fetch status pages');
+        }
+      } else {
+        setError('Failed to fetch status pages');
+      }
     } catch {
       setError('Failed to fetch status pages');
     }
@@ -60,8 +68,16 @@ const StatusPagesSettings: React.FC = () => {
   const fetchEndpoints = async () => {
     try {
       const response = await fetch('/api/endpoints');
-      const data = await response.json();
-      setEndpoints(data);
+      if (response.ok) {
+        const result = await response.json();
+        if (result.success) {
+          setEndpoints(result.data);
+        } else {
+          setError(result.error || 'Failed to fetch endpoints');
+        }
+      } else {
+        setError('Failed to fetch endpoints');
+      }
     } catch {
       setError('Failed to fetch endpoints');
     }

@@ -1,27 +1,42 @@
 import React from 'react';
-import { 
-  AppBar, 
-  Toolbar, 
-  Typography, 
-  Box, 
-  IconButton, 
-  Menu, 
-  MenuItem, 
-  Avatar, 
-  Chip 
+import {
+  AppBar,
+  Toolbar,
+  Typography,
+  Box,
+  IconButton,
+  Menu,
+  MenuItem,
+  Avatar,
+  Chip,
+  Tabs,
+  Tab
 } from '@mui/material';
 import SettingsIcon from '@mui/icons-material/Settings';
 import LogoutIcon from '@mui/icons-material/Logout';
+import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
+import DashboardIcon from '@mui/icons-material/Dashboard';
 import { useAuth } from '../contexts/AuthContext';
 
 interface LayoutProps {
-  master: React.ReactNode;
-  detail: React.ReactNode;
+  master?: React.ReactNode;
+  detail?: React.ReactNode;
+  fullContent?: React.ReactNode;
   showSettings: boolean;
   setShowSettings: (show: boolean) => void;
+  currentView: 'endpoints' | 'health';
+  onViewChange: (view: 'endpoints' | 'health') => void;
 }
 
-const Layout: React.FC<LayoutProps> = ({ master, detail, showSettings, setShowSettings }) => {
+const Layout: React.FC<LayoutProps> = ({
+  master,
+  detail,
+  fullContent,
+  showSettings,
+  setShowSettings,
+  currentView,
+  onViewChange
+}) => {
   const { user, logout } = useAuth();
   const [userMenuAnchor, setUserMenuAnchor] = React.useState<null | HTMLElement>(null);
 
@@ -46,13 +61,46 @@ const Layout: React.FC<LayoutProps> = ({ master, detail, showSettings, setShowSe
             Endpoint Monitor
           </Typography>
           
+          {/* Navigation Tabs */}
+          {user && (
+            <Box sx={{ flexGrow: 1, display: 'flex', justifyContent: 'center' }}>
+              <Tabs
+                value={currentView}
+                onChange={(_, newValue) => onViewChange(newValue)}
+                textColor="inherit"
+                indicatorColor="secondary"
+                sx={{
+                  '& .MuiTab-root': {
+                    color: 'rgba(255, 255, 255, 0.7)',
+                    '&.Mui-selected': { color: 'white' }
+                  }
+                }}
+              >
+                <Tab
+                  value="endpoints"
+                  label="Endpoints"
+                  icon={<MonitorHeartIcon />}
+                  iconPosition="start"
+                />
+                {user.role === 'admin' && (
+                  <Tab
+                    value="health"
+                    label="Instance Health"
+                    icon={<DashboardIcon />}
+                    iconPosition="start"
+                  />
+                )}
+              </Tabs>
+            </Box>
+          )}
+          
           {user && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
               <Chip
-                label={user.role.toUpperCase()}
+                label={user.role?.toUpperCase() || 'USER'}
                 size="small"
                 color={user.role === 'admin' ? 'secondary' : 'default'}
-                sx={{ 
+                sx={{
                   backgroundColor: user.role === 'admin' ? 'secondary.main' : 'grey.600',
                   color: 'white',
                   fontWeight: 'bold'
@@ -69,14 +117,14 @@ const Layout: React.FC<LayoutProps> = ({ master, detail, showSettings, setShowSe
                 color="inherit"
               >
                 <Avatar sx={{ width: 32, height: 32, bgcolor: 'secondary.main' }}>
-                  {user.username.charAt(0).toUpperCase()}
+                  {user.username?.charAt(0).toUpperCase() || 'U'}
                 </Avatar>
               </IconButton>
             </Box>
           )}
 
-          <IconButton 
-            color="inherit" 
+          <IconButton
+            color="inherit"
             onClick={() => setShowSettings(!showSettings)}
             aria-label="settings"
             sx={{ ml: 1 }}
@@ -114,46 +162,54 @@ const Layout: React.FC<LayoutProps> = ({ master, detail, showSettings, setShowSe
         </MenuItem>
       </Menu>
 
-      <Box 
-        component="main" 
-        sx={{ 
-          flexGrow: 1, 
+      <Box
+        component="main"
+        sx={{
+          flexGrow: 1,
           px: { xs: 2, sm: 3, md: 4 },
           py: { xs: 2, sm: 3, md: 4 },
           width: '100%',
           maxWidth: '100%'
         }}
       >
-        <Box
-          sx={{
-            display: 'grid',
-            gridTemplateColumns: { 
-              xs: '1fr', 
-              sm: '1fr', 
-              md: '350px 1fr',
-              lg: '400px 1fr',
-              xl: '450px 1fr' 
-            },
-            gap: { xs: 2, sm: 3, md: 4 },
-            height: 'calc(100vh - 120px)',
-            width: '100%'
-          }}
-        >
-          <Box sx={{ 
-            overflow: 'hidden',
-            display: 'flex',
-            flexDirection: 'column'
-          }}>
-            {master}
+        {fullContent ? (
+          // Full-width content (like Instance Health Dashboard)
+          <Box sx={{ height: 'calc(100vh - 120px)', width: '100%' }}>
+            {fullContent}
           </Box>
-          <Box sx={{ 
-            overflow: 'auto',
-            display: 'flex',
-            flexDirection: 'column'
-          }}>
-            {detail}
+        ) : (
+          // Master-detail layout (for Endpoints view)
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: {
+                xs: '1fr',
+                sm: '1fr',
+                md: '350px 1fr',
+                lg: '400px 1fr',
+                xl: '450px 1fr'
+              },
+              gap: { xs: 2, sm: 3, md: 4 },
+              height: 'calc(100vh - 120px)',
+              width: '100%'
+            }}
+          >
+            <Box sx={{
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column'
+            }}>
+              {master}
+            </Box>
+            <Box sx={{
+              overflow: 'auto',
+              display: 'flex',
+              flexDirection: 'column'
+            }}>
+              {detail}
+            </Box>
           </Box>
-        </Box>
+        )}
       </Box>
       <Box
         component="footer"

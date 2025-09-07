@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { 
   List, 
@@ -96,7 +96,7 @@ const EndpointList: React.FC<EndpointListProps> = ({
   );
 
   // Save preferences to backend
-  const savePreference = async (key: string, value: unknown) => {
+  const savePreference = useCallback(async (key: string, value: unknown) => {
     try {
       const response = await fetch(`/api/preferences/${key}`, {
         method: 'PUT',
@@ -119,7 +119,7 @@ const EndpointList: React.FC<EndpointListProps> = ({
         console.error(`Failed to save ${key} preference to localStorage:`, localError);
       }
     }
-  };
+  }, []);
 
   // Load preferences from backend only after authentication is complete
   useEffect(() => {
@@ -135,28 +135,31 @@ const EndpointList: React.FC<EndpointListProps> = ({
         });
         
         if (response.ok) {
-          const preferences = await response.json();
-          
-          if (preferences.endpoint_custom_order) {
-            setCustomOrder(preferences.endpoint_custom_order);
-          }
-          
+          const result = await response.json();
+          if (result.success) {
+            const preferences = result.data;
+            if (Array.isArray(preferences.endpoint_custom_order)) {
+              setCustomOrder(preferences.endpoint_custom_order);
+            }
+            
+            if (preferences.endpoint_view_mode) {
+              setViewMode(preferences.endpoint_view_mode);
+            }
 
-          if (preferences.endpoint_view_mode) {
-            setViewMode(preferences.endpoint_view_mode);
-          }
+            if (Array.isArray(preferences.endpoint_groups)) {
+              setGroups(preferences.endpoint_groups);
+            }
 
-          if (preferences.endpoint_groups) {
-            setGroups(preferences.endpoint_groups);
-          }
-
-          if (preferences.endpoint_group_map) {
-            // Ensure keys are converted to proper types (numbers if they can be parsed, otherwise strings)
-            const groupMapEntries = Object.entries(preferences.endpoint_group_map).map(([key, value]) => {
-              const numericKey = !isNaN(Number(key)) ? Number(key) : key;
-              return [numericKey, value as string] as [string | number, string];
-            });
-            setEndpointGroupMap(new Map(groupMapEntries));
+            if (preferences.endpoint_group_map && typeof preferences.endpoint_group_map === 'object') {
+              // Ensure keys are converted to proper types (numbers if they can be parsed, otherwise strings)
+              const groupMapEntries = Object.entries(preferences.endpoint_group_map).map(([key, value]) => {
+                const numericKey = !isNaN(Number(key)) ? Number(key) : key;
+                return [numericKey, value as string] as [string | number, string];
+              });
+              setEndpointGroupMap(new Map(groupMapEntries));
+            }
+          } else {
+            throw new Error(result.error || 'Failed to load preferences');
           }
         } else {
           console.warn('Failed to load preferences from backend, status:', response.status);
@@ -214,30 +217,51 @@ const EndpointList: React.FC<EndpointListProps> = ({
 
   // Order endpoints based on custom order
   const sortedEndpoints = useMemo(() => {
+    console.log('[DEBUG EndpointList] sortedEndpoints - endpoints:', endpoints);
+    console.log('[DEBUG EndpointList] sortedEndpoints - endpoints.length:', endpoints?.length);
+    console.log('[DEBUG EndpointList] sortedEndpoints - Array.isArray(endpoints):', Array.isArray(endpoints));
+    console.log('[DEBUG EndpointList] sortedEndpoints - customOrder:', customOrder);
+    console.log('[DEBUG EndpointList] sortedEndpoints - Array.isArray(customOrder):', Array.isArray(customOrder));
+    
+    if (!Array.isArray(endpoints)) {
+      console.error('[DEBUG EndpointList] endpoints is not an array:', typeof endpoints, endpoints);
+      return [];
+    }
+    
     if (endpoints.length === 0) return [];
+
+    if (!Array.isArray(customOrder)) {
+      console.error('[DEBUG EndpointList] customOrder is not an array:', typeof customOrder, customOrder);
+      return endpoints;
+    }
 
     // Use custom order
     if (customOrder.length === 0) return endpoints;
 
-    const endpointsMap = new Map(endpoints.map(ep => [ep.id, ep]));
-    const orderedEndpoints: Endpoint[] = [];
-    const usedIds = new Set();
+    try {
+      const endpointsMap = new Map(endpoints.map(ep => [ep.id, ep]));
+      const orderedEndpoints: Endpoint[] = [];
+      const usedIds = new Set();
 
-    customOrder.forEach(id => {
-      const endpoint = endpointsMap.get(id);
-      if (endpoint) {
-        orderedEndpoints.push(endpoint);
-        usedIds.add(id);
-      }
-    });
+      customOrder.forEach(id => {
+        const endpoint = endpointsMap.get(id);
+        if (endpoint) {
+          orderedEndpoints.push(endpoint);
+          usedIds.add(id);
+        }
+      });
 
-    endpoints.forEach(endpoint => {
-      if (!usedIds.has(endpoint.id)) {
-        orderedEndpoints.push(endpoint);
-      }
-    });
+      endpoints.forEach(endpoint => {
+        if (!usedIds.has(endpoint.id)) {
+          orderedEndpoints.push(endpoint);
+        }
+      });
 
-    return orderedEndpoints;
+      return orderedEndpoints;
+    } catch (error) {
+      console.error('[DEBUG EndpointList] Error in sortedEndpoints:', error);
+      return endpoints;
+    }
   }, [endpoints, customOrder]);
 
   // Get ungrouped endpoints
@@ -263,11 +287,11 @@ const EndpointList: React.FC<EndpointListProps> = ({
     return result;
   }, [sortedEndpoints, endpointGroupMap, groups]);
 
-  const handleDragStart = (event: { active: { id: string | number } }) => {
+  const handleDragStart = useCallback((event: { active: { id: string | number } }) => {
     setActiveId(event.active.id);
-  };
+  }, [setActiveId]);
 
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
     setActiveId(null);
 
@@ -389,9 +413,9 @@ const EndpointList: React.FC<EndpointListProps> = ({
         }
       }
     }
-  };
+  }, [effectiveViewMode, sortedEndpoints, customOrder, groups, endpointGroupMap, savePreference, ungroupedEndpoints, setActiveId, setCustomOrder, setEndpointGroupMap, setGroups]);
 
-  const handleDragOver = (event: DragOverEvent) => {
+  const handleDragOver = useCallback((event: DragOverEvent) => {
     const { active, over } = event;
     
     if (!over || viewMode === 'list') return;
@@ -412,7 +436,7 @@ const EndpointList: React.FC<EndpointListProps> = ({
         return;
       }
     }
-  };
+  }, [viewMode, sortedEndpoints, groups]);
 
 
   const handleViewModeChange = (mode: ViewMode) => {

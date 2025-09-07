@@ -51,13 +51,17 @@ const UserManagement: React.FC = () => {
   const fetchUsers = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/admin/users', {
+      const response = await fetch('/api/users', {
         credentials: 'include',
       });
       
       if (response.ok) {
-        const data = await response.json();
-        setUsers(data);
+        const result = await response.json();
+        if (result.success) {
+          setUsers(result.data);
+        } else {
+          setError(result.error || 'Failed to load users');
+        }
       } else {
         setError('Failed to load users');
       }
@@ -70,7 +74,7 @@ const UserManagement: React.FC = () => {
 
   const handleCreateUser = async () => {
     try {
-      const response = await fetch('/api/admin/users', {
+      const response = await fetch('/api/users', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -111,7 +115,7 @@ const UserManagement: React.FC = () => {
         updateData.password = formData.password;
       }
 
-      const response = await fetch(`/api/admin/users/${selectedUser.id}`, {
+      const response = await fetch(`/api/users/${selectedUser.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -140,7 +144,7 @@ const UserManagement: React.FC = () => {
     }
 
     try {
-      const response = await fetch(`/api/admin/users/${userId}`, {
+      const response = await fetch(`/api/users/${userId}`, {
         method: 'DELETE',
         credentials: 'include',
       });
@@ -224,7 +228,7 @@ const UserManagement: React.FC = () => {
                 <TableCell>{user.email || '-'}</TableCell>
                 <TableCell>
                   <Chip
-                    label={user.role.toUpperCase()}
+                    label={user.role?.toUpperCase() || 'USER'}
                     color={user.role === 'admin' ? 'secondary' : 'default'}
                     size="small"
                   />

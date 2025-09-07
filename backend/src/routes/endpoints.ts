@@ -1,29 +1,45 @@
 import { Elysia, t } from 'elysia';
-import { Database } from 'bun:sqlite';
 import type { Endpoint } from '../types';
-import { AuthService } from '../services/auth';
-import { LoggerService } from '../services/logger';
-import { MonitoringService } from '../services/monitoring';
-import { DomainInfoService } from '../services/domain-info';
-import { CertificateService } from '../services/certificate';
+import type { IMonitoringService } from '../types/monitoring';
+import { ServiceContainer } from '../services/service-container';
 import { validateEndpoint } from '../utils/validation';
 import { calculateGapAwareUptime } from '../utils/uptime';
 import { formatDuration } from '../utils/formatting';
 import { calculateResponseTimeStatistics } from '../utils/statistics';
+import { createSuccessResponse, createErrorResponse } from '../utils/auth-constants';
 
-export function createEndpointsRoutes(
-  db: Database,
-  authService: AuthService, 
-  logger: LoggerService,
-  monitoringService: MonitoringService,
-  domainInfoService: DomainInfoService,
-  certificateService: CertificateService,
-  requireAuth: (handler: any) => any,
-  requireRole: (role: 'admin' | 'user') => (handler: any) => any
-) {
+/**
+ * Creates endpoint management routes
+ * @param services Service container with all required dependencies
+ * @returns Elysia route handler for endpoint management
+ */
+export function createEndpointsRoutes(services: ServiceContainer) {
+  const {
+    db,
+    logger,
+    monitoringService,
+    domainInfoService,
+    certificateService,
+    requireRole
+  } = services;
   
   return new Elysia({ prefix: '/api' })
-    .get('/endpoints', async () => {
+    .onBeforeHandle(({ request, set }) => {
+      // Limit request body size to 5MB for endpoint routes
+      const contentLength = request.headers.get('content-length');
+      if (contentLength && parseInt(contentLength) > 5 * 1024 * 1024) {
+        set.status = 413;
+        return { success: false, error: 'Request body too large' };
+      }
+    })
+
+    // === Endpoint Retrieval ===
+
+    /**
+     * Get all endpoints with statistics and uptime data
+     * @returns Array of endpoints with calculated statistics and uptime metrics
+     */
+    .get('/endpoints', requireRole('user')(async () => {
       const endpoints: Endpoint[] = db.query('SELECT * FROM endpoints').all() as Endpoint[];
       const endpointsWithStats = await Promise.all(
         endpoints.map(async (endpoint) => {
@@ -38,9 +54,9 @@ export function createEndpointsRoutes(
 
           const result = {
             ...endpoint,
-            ok_http_statuses: endpoint.ok_http_statuses ? JSON.parse(endpoint.ok_http_statuses) : [],
-            http_headers: endpoint.http_headers ? JSON.parse(endpoint.http_headers) : null,
-            kafka_config: endpoint.kafka_config ? JSON.parse(endpoint.kafka_config) : null,
+            ok_http_statuses: endpoint.ok_http_statuses && endpoint.ok_http_statuses.trim() !== '' ? JSON.parse(endpoint.ok_http_statuses) : [],
+            http_headers: endpoint.http_headers && endpoint.http_headers.trim() !== '' ? JSON.parse(endpoint.http_headers) : null,
+            kafka_config: endpoint.kafka_config && endpoint.kafka_config.trim() !== '' ? JSON.parse(endpoint.kafka_config) : null,
             // Properly convert SQLite integer values to booleans
             paused: Boolean(endpoint.paused),
             upside_down_mode: Boolean(endpoint.upside_down_mode),
@@ -59,387 +75,16 @@ export function createEndpointsRoutes(
           return result;
         })
       );
-      return endpointsWithStats;
-    })
-    .get('/endpoints/:id/stats', async ({ params, query }) => {
-      const { id } = params;
-      const range = (query.range || '24h') as '3h' | '6h' | '24h' | '1w';
+      return createSuccessResponse(endpointsWithStats);
+    }))
 
-      // Get endpoint heartbeat interval for gap-aware calculation
-      const endpoint = db.query('SELECT heartbeat_interval FROM endpoints WHERE id = ?').get(id) as any;
-      const heartbeatInterval = endpoint?.heartbeat_interval || 60;
+    // === Endpoint Creation ===
 
-      const rangeToPeriod = {
-        '3h': '3 hours',
-        '6h': '6 hours', 
-        '24h': '1 day',
-        '1w': '7 days',
-      };
-
-      const period = rangeToPeriod[range];
-      const stats = await calculateGapAwareUptime(db, parseInt(id), heartbeatInterval, period);
-
-      // Get response times for statistical calculations
-      const rangeToSql = {
-        '3h': "datetime('now', '-3 hours')",
-        '6h': "datetime('now', '-6 hours')",
-        '24h': "datetime('now', '-1 day')",
-        '1w': "datetime('now', '-7 days')",
-      };
-
-      const since = rangeToSql[range];
-      const responseTimes = db.query(
-        `SELECT response_time FROM response_times 
-         WHERE endpoint_id = ? AND created_at >= ${since} AND response_time IS NOT NULL AND response_time > 0
-         ORDER BY created_at ASC`
-      ).all(id) as any[];
-
-      // Calculate advanced statistics
-      const responseTimeValues = responseTimes.map(row => row.response_time);
-      const advancedStats = calculateResponseTimeStatistics(responseTimeValues);
-
-      return {
-        avg_response: stats?.avg_response || 0,
-        uptime: stats?.uptime || 0,
-        monitoring_coverage: stats?.monitoring_coverage || 0,
-        // Add new statistical measures
-        p50: advancedStats.p50,
-        p90: advancedStats.p90,
-        p95: advancedStats.p95,
-        p99: advancedStats.p99,
-        std_dev: advancedStats.std_dev,
-        mad: advancedStats.mad,
-        min_response: advancedStats.min,
-        max_response: advancedStats.max,
-        response_count: advancedStats.count
-      };
-    })
-    .get('/endpoints/:id/response-times', async ({ params, query }) => {
-      const { id } = params;
-      const range = (query.range || '24h') as '3h' | '6h' | '24h' | '1w';
-
-      const rangeToSql = {
-        '3h': "datetime('now', '-3 hours')",
-        '6h': "datetime('now', '-6 hours')",
-        '24h': "datetime('now', '-1 day')",
-        '1w': "datetime('now', '-7 days')",
-      };
-
-      const since = rangeToSql[range];
-
-      // Target around 60-80 data points for all time ranges
-      let groupByFormat: string;
-      let intervalMinutes: number;
-
-      switch (range) {
-        case '3h':
-          // Group by 3-minute intervals for 3h (60 points)
-          groupByFormat = "strftime('%Y-%m-%d %H:', created_at) || printf('%02d', (cast(strftime('%M', created_at) as integer) / 3) * 3)";
-          intervalMinutes = 3;
-          break;
-        case '6h':
-          // Group by 5-minute intervals for 6h (72 points)
-          groupByFormat = "strftime('%Y-%m-%d %H:', created_at) || printf('%02d', (cast(strftime('%M', created_at) as integer) / 5) * 5)";
-          intervalMinutes = 5;
-          break;
-        case '24h':
-          // Group by 20-minute intervals for 24h (72 points)
-          groupByFormat = "strftime('%Y-%m-%d %H:', created_at) || printf('%02d', (cast(strftime('%M', created_at) as integer) / 20) * 20)";
-          intervalMinutes = 20;
-          break;
-        case '1w':
-          // Group by 3-hour intervals for 1 week (56 points)
-          groupByFormat = "strftime('%Y-%m-%d ', created_at) || printf('%02d:00:00', (cast(strftime('%H', created_at) as integer) / 3) * 3)";
-          intervalMinutes = 180;
-          break;
-      }
-
-      const aggregatedData = db.query(
-        `SELECT 
-          ${groupByFormat} as time_bucket,
-          AVG(response_time) as avg_response_time,
-          MIN(response_time) as min_response_time,
-          MAX(response_time) as max_response_time,
-          -- Determine predominant status: if any DOWN, then DOWN, else UP
-          CASE 
-            WHEN COUNT(CASE WHEN status = 'DOWN' THEN 1 END) > 0 THEN 'DOWN'
-            ELSE 'UP'
-          END as status,
-          -- Use the latest timestamp in the bucket as created_at
-          MAX(created_at) as created_at,
-          COUNT(*) as data_points
-        FROM response_times 
-        WHERE endpoint_id = ? AND created_at >= ${since}
-        GROUP BY ${groupByFormat}
-        ORDER BY created_at ASC`
-      ).all(id) as any[];
-
-      // Transform the aggregated data to include min/max for banded chart
-      return aggregatedData.map(row => ({
-        id: 0, // Not used for charts
-        endpoint_id: parseInt(id),
-        response_time: Math.round(row.avg_response_time),
-        min_response_time: row.min_response_time,
-        max_response_time: row.max_response_time,
-        status: row.status,
-        created_at: row.created_at,
-        data_points: row.data_points // Additional info about how many points were aggregated
-      }));
-    })
-    .get('/endpoints/:id/outages', async ({ params, query }) => {
-      const { id } = params;
-      const limit = parseInt(query.limit as string) || 50;
-
-      // Get all status changes for this endpoint, ordered by time
-      const statusChanges = db.query(
-        `SELECT status, created_at, response_time, failure_reason
-         FROM response_times 
-         WHERE endpoint_id = ? 
-         ORDER BY created_at DESC 
-         LIMIT 1000`
-      ).all(id) as any[];
-
-      const outages: Array<{
-        started_at: string;
-        ended_at: string | null;
-        duration_ms: number | null;
-        duration_text: string;
-        reason: string;
-      }> = [];
-
-      let currentOutageStart: string | null = null;
-      let currentOutageReason: string = 'Service check failed';
-      
-      // Process status changes in reverse chronological order to build outage periods
-      for (let i = statusChanges.length - 1; i >= 0; i--) {
-        const change = statusChanges[i];
-        
-        if (change.status === 'DOWN' && !currentOutageStart) {
-          // Start of an outage
-          currentOutageStart = change.created_at;
-          currentOutageReason = change.failure_reason || 'Service check failed';
-        } else if (change.status === 'UP' && currentOutageStart) {
-          // End of an outage
-          const startTime = new Date(currentOutageStart);
-          const endTime = new Date(change.created_at);
-          const durationMs = endTime.getTime() - startTime.getTime();
-          
-          outages.push({
-            started_at: currentOutageStart,
-            ended_at: change.created_at,
-            duration_ms: durationMs,
-            duration_text: formatDuration(durationMs),
-            reason: currentOutageReason
-          });
-          
-          currentOutageStart = null;
-          currentOutageReason = 'Service check failed';
-        }
-      }
-      
-      // If there's an ongoing outage
-      if (currentOutageStart) {
-        const startTime = new Date(currentOutageStart);
-        const now = new Date();
-        const durationMs = now.getTime() - startTime.getTime();
-        
-        outages.push({
-          started_at: currentOutageStart,
-          ended_at: null,
-          duration_ms: durationMs,
-          duration_text: formatDuration(durationMs) + ' (ongoing)',
-          reason: currentOutageReason
-        });
-      }
-
-      // Sort by most recent first and limit results
-      return outages.sort((a, b) => 
-        new Date(b.started_at).getTime() - new Date(a.started_at).getTime()
-      ).slice(0, limit);
-    })
-    .get('/endpoints/:id/heartbeats', async ({ params, query }) => {
-      const { id } = params;
-      const limit = parseInt(query.limit as string) || 24;
-
-      // Get recent heartbeats for this endpoint, ordered by time (most recent first)
-      const heartbeats = db.query(
-        `SELECT status, created_at, response_time
-         FROM response_times 
-         WHERE endpoint_id = ? 
-         ORDER BY created_at DESC 
-         LIMIT ?`
-      ).all(id, limit) as any[];
-
-      // Return in chronological order (oldest first) for proper display
-      return heartbeats.reverse();
-    })
-    .get('/endpoints/:id/certificate-chain', async ({ params, set }) => {
-      const { id } = params;
-      
-      // Get endpoint URL
-      const endpoint = db.query('SELECT url, check_cert_expiry FROM endpoints WHERE id = ?').get(id) as any;
-      if (!endpoint) {
-        set.status = 404;
-        return { error: 'Endpoint not found' };
-      }
-
-      if (!endpoint.check_cert_expiry) {
-        set.status = 400;
-        return { error: 'Certificate checking is not enabled for this endpoint' };
-      }
-
-      // Get certificate chain information
-      const result = await certificateService.getCertificateChain(endpoint.url);
-      
-      if (!result.success) {
-        set.status = 500;
-        return { error: result.error.error, details: result.error.details };
-      }
-
-      return result.result;
-    })
-    .get('/endpoints/:id/domain-info', async ({ params, set }) => {
-      const { id } = params;
-      
-      // Get cached domain info from database
-      const endpoint = db.query('SELECT domain_expires_in, domain_expiry_date, domain_creation_date, domain_updated_date FROM endpoints WHERE id = ?').get(id) as any;
-      if (!endpoint) {
-        set.status = 404;
-        return { error: 'Endpoint not found' };
-      }
-
-      // Return cached domain information (same format as DomainInfo interface)
-      return {
-        creationDate: endpoint.domain_creation_date ? new Date(endpoint.domain_creation_date) : null,
-        updatedDate: endpoint.domain_updated_date ? new Date(endpoint.domain_updated_date) : null,
-        expiryDate: endpoint.domain_expiry_date ? new Date(endpoint.domain_expiry_date) : null,
-        daysRemaining: endpoint.domain_expires_in
-      };
-    })
-    .get('/endpoints/:id/enhanced-domain-info', async ({ params, set }) => {
-      const { id } = params;
-      
-      // Get endpoint URL and cached domain info
-      const endpoint = db.query('SELECT url, domain_expires_in, domain_expiry_date, domain_creation_date, domain_updated_date FROM endpoints WHERE id = ?').get(id) as any;
-      if (!endpoint) {
-        set.status = 404;
-        return { error: 'Endpoint not found' };
-      }
-
-      try {
-        // Get enhanced domain information using the domain info service
-        const domainResult = await domainInfoService.getDomainInfo(endpoint.url);
-        
-        // Base domain info (use fresh data if available, fallback to cached)
-        const domainInfo = {
-          creationDate: domainResult.success ? domainResult.result.creationDate : 
-            (endpoint.domain_creation_date ? new Date(endpoint.domain_creation_date) : null),
-          updatedDate: domainResult.success ? domainResult.result.updatedDate : 
-            (endpoint.domain_updated_date ? new Date(endpoint.domain_updated_date) : null),
-          expiryDate: domainResult.success ? domainResult.result.expiryDate : 
-            (endpoint.domain_expiry_date ? new Date(endpoint.domain_expiry_date) : null),
-          daysRemaining: domainResult.success ? domainResult.result.daysRemaining : endpoint.domain_expires_in
-        };
-
-        // Gather additional information
-        let dnsInfo = null;
-        let serverInfo = null;
-
-        try {
-          const parsedUrl = new URL(endpoint.url);
-          const hostname = parsedUrl.hostname;
-
-          // DNS lookup
-          try {
-            const dns = await import('dns').then(d => d.promises);
-            const [aRecords, txtRecords, mxRecords, nsRecords] = await Promise.allSettled([
-              dns.resolve4(hostname).catch(() => []),
-              dns.resolveTxt(hostname).catch(() => []),
-              dns.resolveMx(hostname).catch(() => []),
-              dns.resolveNs(hostname).catch(() => [])
-            ]);
-
-            // Try CNAME lookup
-            let cnameRecord = null;
-            try {
-              const cnames = await dns.resolveCname(hostname);
-              cnameRecord = cnames[0] || null;
-            } catch {
-              // CNAME lookup failed, which is normal for A records
-            }
-
-            dnsInfo = {
-              A: aRecords.status === 'fulfilled' ? aRecords.value : [],
-              CNAME: cnameRecord,
-              TXT: txtRecords.status === 'fulfilled' ? txtRecords.value.flat() : [],
-              MX: mxRecords.status === 'fulfilled' ? mxRecords.value : [],
-              NS: nsRecords.status === 'fulfilled' ? nsRecords.value : [],
-              SOA: null // Not implemented for now
-            };
-          } catch (err) {
-            logger.debug(`DNS lookup failed for ${hostname}: ${err}`, 'DOMAIN_INFO');
-          }
-
-          // Server info (only for HTTP endpoints)
-          if (endpoint.url.startsWith('http')) {
-            try {
-              const response = await fetch(endpoint.url, {
-                method: 'HEAD',
-                signal: AbortSignal.timeout(5000)
-              });
-              
-              serverInfo = {
-                httpStatus: response.status,
-                serverHeader: response.headers.get('server') || undefined
-              };
-            } catch (err) {
-              logger.debug(`Server info check failed for ${endpoint.url}: ${err}`, 'DOMAIN_INFO');
-            }
-          }
-        } catch (err) {
-          logger.debug(`URL parsing failed for ${endpoint.url}: ${err}`, 'DOMAIN_INFO');
-        }
-
-        return {
-          domain: domainInfo,
-          certificate: null, // Certificate info is handled separately
-          dns: dnsInfo,
-          server: serverInfo
-        };
-      } catch (error) {
-        logger.error(`Enhanced domain info failed for endpoint ${id}: ${error}`, 'DOMAIN_INFO');
-        set.status = 500;
-        return { error: 'Failed to fetch enhanced domain information' };
-      }
-    })
-    .delete('/endpoints/:id/heartbeats', async ({ params }) => {
-      const { id } = params;
-      
-      // Delete all heartbeat data (response_times) for this endpoint
-      const result = db.run('DELETE FROM response_times WHERE endpoint_id = ?', [id]);
-      
-      logger.info(`Deleted ${result.changes} heartbeat records for endpoint ID: ${id}`, 'DATA_MANAGEMENT');
-      
-      return { 
-        success: true, 
-        deletedCount: result.changes,
-        message: `Deleted ${result.changes} heartbeat records` 
-      };
-    })
-    .delete('/endpoints/:id/outages', async ({ params }) => {
-      const { id } = params;
-      
-      // Since outages are calculated from response_times, deleting response_times clears outage history
-      const result = db.run('DELETE FROM response_times WHERE endpoint_id = ?', [id]);
-      
-      logger.info(`Deleted outage history (${result.changes} response records) for endpoint ID: ${id}`, 'DATA_MANAGEMENT');
-      
-      return { 
-        success: true, 
-        deletedCount: result.changes,
-        message: `Deleted outage history (${result.changes} records)` 
-      };
-    })
+    /**
+     * Create a new endpoint for monitoring
+     * @param body - Endpoint configuration data
+     * @returns Created endpoint with statistics
+     */
     .post('/endpoints', requireRole('admin')(async ({ body, set }: any) => {
       try {
         logger.debug(`Received POST /api/endpoints`, 'ENDPOINT');
@@ -452,7 +97,7 @@ export function createEndpointsRoutes(
         if (!validation.isValid) {
           set.status = 400;
           logger.warn(`Endpoint validation failed: ${validation.error}`, 'SECURITY');
-          return { error: validation.error };
+          return createErrorResponse(validation.error || 'Validation failed');
         }
 
         const sanitizedData = validation.sanitizedValue!;
@@ -523,22 +168,22 @@ export function createEndpointsRoutes(
             cert_expires_in: newEndpoint.cert_expires_in,
             cert_expiry_date: newEndpoint.cert_expiry_date,
           };
-          
-          return fullEndpoint;
+
+          return createSuccessResponse(fullEndpoint);
         }
 
         // Fallback if we can't retrieve the new endpoint
-        return { 
-          id: result.lastInsertRowid, 
-          url: sanitizedData.url, 
-          name: sanitizedData.name || sanitizedData.url, 
+        return createSuccessResponse({
+          id: result.lastInsertRowid,
+          url: sanitizedData.url,
+          name: sanitizedData.name || sanitizedData.url,
           type: sanitizedData.type,
-          status: 'pending' 
-        };
+          status: 'pending'
+        });
       } catch (error) {
         logger.error(`Failed to create endpoint: ${error}`, 'ENDPOINT');
         set.status = 500;
-        return { error: 'Failed to create endpoint: ' + (error instanceof Error ? error.message : 'Unknown error') };
+        return createErrorResponse('Failed to create endpoint: ' + (error instanceof Error ? error.message : 'Unknown error'));
       }
     }), {
       body: t.Object({
@@ -551,6 +196,15 @@ export function createEndpointsRoutes(
         ])
       }, { additionalProperties: true })
     })
+
+    // === Endpoint Modification ===
+
+    /**
+     * Update an existing endpoint configuration
+     * @param params.id - Endpoint ID to update
+     * @param body - Updated endpoint configuration
+     * @returns Updated endpoint data
+     */
     .put('/endpoints/:id', requireRole('admin')(async ({ params, body, set }: any) => {
       try {
         const { id } = params;
@@ -561,7 +215,7 @@ export function createEndpointsRoutes(
         const existingEndpoint = db.query('SELECT * FROM endpoints WHERE id = ?').get(id) as any;
         if (!existingEndpoint) {
           set.status = 404;
-          return { error: 'Endpoint not found' };
+          return createErrorResponse('Endpoint not found');
         }
 
         // Log potential security issues for monitoring
@@ -572,7 +226,7 @@ export function createEndpointsRoutes(
         if (!validation.isValid) {
           set.status = 400;
           logger.warn(`Endpoint validation failed for update: ${validation.error}`, 'SECURITY');
-          return { error: validation.error };
+          return createErrorResponse(validation.error || 'Validation failed');
         }
 
         const sanitizedData = validation.sanitizedValue!;
@@ -619,15 +273,15 @@ export function createEndpointsRoutes(
         // Restart monitoring with new configuration (hot-reload)
         monitoringService.restartEndpointMonitoring(parseInt(id));
 
-        return { 
-          id, 
-          name: sanitizedData.name, 
-          url: sanitizedData.url 
-        };
+        return createSuccessResponse({
+          id,
+          name: sanitizedData.name,
+          url: sanitizedData.url
+        });
       } catch (error) {
         logger.error(`Failed to update endpoint: ${error}`, 'ENDPOINT');
         set.status = 500;
-        return { error: 'Failed to update endpoint: ' + (error instanceof Error ? error.message : 'Unknown error') };
+        return createErrorResponse('Failed to update endpoint: ' + (error instanceof Error ? error.message : 'Unknown error'));
       }
     }), {
       body: t.Object({
@@ -640,6 +294,14 @@ export function createEndpointsRoutes(
         ])
       }, { additionalProperties: true })
     })
+
+    // === Endpoint Deletion ===
+
+    /**
+     * Delete an endpoint and stop its monitoring
+     * @param params.id - Endpoint ID to delete
+     * @returns Success confirmation
+     */
     .delete('/endpoints/:id', requireRole('admin')(async ({ params }: any) => {
       const { id } = params;
       
@@ -652,22 +314,30 @@ export function createEndpointsRoutes(
       logger.info(`Stopped monitoring for deleted endpoint "${endpointName}" (ID: ${id})`, 'MONITORING');
       
       db.run('DELETE FROM endpoints WHERE id = ?', [id]);
-      return { id };
+      return createSuccessResponse({ id });
     }))
+
+    // === Endpoint Control ===
+
+    /**
+     * Toggle pause/unpause status for an endpoint
+     * @param params.id - Endpoint ID to toggle
+     * @returns Updated pause status
+     */
     .post('/endpoints/:id/toggle-pause', requireRole('admin')(async ({ params }: any) => {
       const { id } = params;
-      
+
       // Get current pause status
       const endpoint = db.query('SELECT * FROM endpoints WHERE id = ?').get(id) as any;
       if (!endpoint) {
         throw new Error('Endpoint not found');
       }
-      
+
       const newPausedState = !endpoint.paused;
-      
+
       // Update pause status in database
       db.run('UPDATE endpoints SET paused = ? WHERE id = ?', [newPausedState, id]);
-      
+
       // Apply pause/unpause immediately (hot-reload)
       if (newPausedState) {
         // Pausing the endpoint - stop monitoring
@@ -678,7 +348,325 @@ export function createEndpointsRoutes(
         monitoringService.restartEndpointMonitoring(parseInt(id));
         logger.info(`Resumed monitoring for endpoint "${endpoint.name}" (ID: ${id})`, 'MONITORING');
       }
-      
-      return { id, paused: newPausedState };
-    }));
+
+      return createSuccessResponse({ id, paused: newPausedState });
+    }))
+
+    /**
+     * Get outages for an endpoint
+     * @param params.id - Endpoint ID
+     * @param query.limit - Maximum number of outages to return
+     * @returns Array of outage records
+     */
+    .get('/endpoints/:id/outages', requireRole('user')(async ({ params, query }: any) => {
+      const { id } = params;
+      const limit = parseInt(query.limit) || 50;
+
+      const outages = db.query(`
+        SELECT
+          started_at,
+          ended_at,
+          CASE
+            WHEN ended_at IS NULL THEN NULL
+            ELSE ROUND((julianday(ended_at) - julianday(started_at)) * 86400)
+          END as duration_ms,
+          CASE
+            WHEN ended_at IS NULL THEN 'Ongoing'
+            ELSE printf('%d seconds', ROUND((julianday(ended_at) - julianday(started_at)) * 86400))
+          END as duration_text,
+          reason
+        FROM outages
+        WHERE endpoint_id = ?
+        ORDER BY started_at DESC
+        LIMIT ?
+      `).all(id, limit) as any[];
+
+      return createSuccessResponse(outages);
+    }), {
+      params: t.Object({
+        id: t.String()
+      }),
+      query: t.Object({
+        limit: t.Optional(t.String())
+      })
+    })
+
+    /**
+     * Delete all outages for an endpoint
+     * @param params.id - Endpoint ID
+     * @returns Success confirmation
+     */
+    .delete('/endpoints/:id/outages', requireRole('admin')(async ({ params, set }: any) => {
+      const { id } = params;
+
+      // Check if endpoint exists
+      const endpoint = db.query('SELECT name FROM endpoints WHERE id = ?').get(id) as any;
+      if (!endpoint) {
+        set.status = 404;
+        return createErrorResponse('Endpoint not found');
+      }
+
+      // Delete all outages for this endpoint
+      db.run('DELETE FROM outages WHERE endpoint_id = ?', [id]);
+
+      logger.info(`Cleared all outage data for endpoint "${endpoint.name}" (ID: ${id})`, 'ENDPOINT');
+
+      return createSuccessResponse({ message: 'Outage data cleared successfully' });
+    }), {
+      params: t.Object({
+        id: t.String()
+      })
+    })
+
+    /**
+     * Get certificate chain for an endpoint
+     * @param params.id - Endpoint ID
+     * @returns Certificate chain information
+     */
+    .get('/endpoints/:id/certificate-chain', requireRole('user')(async ({ params, set }: any) => {
+      const { id } = params;
+
+      const endpoint = db.query('SELECT * FROM endpoints WHERE id = ?').get(id) as Endpoint | null;
+      if (!endpoint) {
+        set.status = 404;
+        return createErrorResponse('Endpoint not found');
+      }
+
+      if (endpoint.type !== 'http') {
+        set.status = 400;
+        return createErrorResponse('Certificate chain is only available for HTTP endpoints');
+      }
+
+      try {
+        const result = await certificateService.getCertificateChain(endpoint.url);
+        if (result.success) {
+          return createSuccessResponse(result.result);
+        } else {
+          set.status = 400;
+          return createErrorResponse(result.error.details);
+        }
+      } catch (error) {
+        logger.error(`Failed to get certificate chain for endpoint ${id}: ${error}`, 'ENDPOINT');
+        set.status = 500;
+        return createErrorResponse('Failed to retrieve certificate chain');
+      }
+    }), {
+      params: t.Object({
+        id: t.String()
+      })
+    })
+
+    /**
+     * Get domain information for an endpoint
+     * @param params.id - Endpoint ID
+     * @returns Domain registration information
+     */
+    .get('/endpoints/:id/domain-info', requireRole('user')(async ({ params, set }: any) => {
+      const { id } = params;
+
+      const endpoint = db.query('SELECT * FROM endpoints WHERE id = ?').get(id) as Endpoint | null;
+      if (!endpoint) {
+        set.status = 404;
+        return createErrorResponse('Endpoint not found');
+      }
+
+      try {
+        const result = await domainInfoService.getDomainInfo(endpoint.url);
+        if (result.success) {
+          return createSuccessResponse(result.result);
+        } else {
+          set.status = 400;
+          return createErrorResponse(result.error.details);
+        }
+      } catch (error) {
+        logger.error(`Failed to get domain info for endpoint ${id}: ${error}`, 'ENDPOINT');
+        set.status = 500;
+        return createErrorResponse('Failed to retrieve domain information');
+      }
+    }), {
+      params: t.Object({
+        id: t.String()
+      })
+    })
+
+    /**
+     * Get enhanced domain information for an endpoint
+     * @param params.id - Endpoint ID
+     * @returns Enhanced domain registration information with additional RDAP data
+     */
+    .get('/endpoints/:id/enhanced-domain-info', requireRole('user')(async ({ params, set }: any) => {
+      const { id } = params;
+
+      const endpoint = db.query('SELECT * FROM endpoints WHERE id = ?').get(id) as Endpoint | null;
+      if (!endpoint) {
+        set.status = 404;
+        return createErrorResponse('Endpoint not found');
+      }
+
+      try {
+        const result = await domainInfoService.getEnhancedDomainInfo(endpoint.url);
+        if (result.success) {
+          return createSuccessResponse(result.result);
+        } else {
+          set.status = 400;
+          return createErrorResponse(result.error.details);
+        }
+      } catch (error) {
+        logger.error(`Failed to get enhanced domain info for endpoint ${id}: ${error}`, 'ENDPOINT');
+        set.status = 500;
+        return createErrorResponse('Failed to retrieve enhanced domain information');
+      }
+    }), {
+      params: t.Object({
+        id: t.String()
+      })
+    })
+
+    /**
+     * Get statistics for an endpoint
+     * @param params.id - Endpoint ID
+     * @returns Comprehensive endpoint statistics
+     */
+    .get('/endpoints/:id/stats', requireRole('user')(async ({ params, query, set }: any) => {
+      const { id } = params;
+      const range = query.range || '24h'; // Default to 24h
+
+      const endpoint = db.query('SELECT * FROM endpoints WHERE id = ?').get(id) as Endpoint | null;
+      if (!endpoint) {
+        set.status = 404;
+        return createErrorResponse('Endpoint not found');
+      }
+
+      try {
+        // Determine time period for query
+        const timePeriods: { [key: string]: string } = {
+          '3h': '3 hours',
+          '6h': '6 hours',
+          '24h': '1 day',
+          '1w': '7 days'
+        };
+        const period = timePeriods[range] || '1 day';
+
+        // Get uptime and coverage stats
+        const uptimeStats = await calculateGapAwareUptime(db, parseInt(id), endpoint.heartbeat_interval || 60, period);
+
+        // Get response time raw data for statistical analysis
+        const responseTimes = db.query(
+          `SELECT response_time FROM response_times WHERE endpoint_id = ? AND created_at >= datetime('now', '-${period}')`
+        ).all(id) as any[];
+        
+        const responseValues = responseTimes.map(rt => rt.response_time);
+        const responseStats = calculateResponseTimeStatistics(responseValues);
+
+        const stats = {
+          avg_response: uptimeStats.avg_response,
+          uptime: uptimeStats.uptime,
+          monitoring_coverage: uptimeStats.monitoring_coverage,
+          p50: responseStats.p50,
+          p90: responseStats.p90,
+          p95: responseStats.p95,
+          p99: responseStats.p99,
+          std_dev: responseStats.std_dev,
+          mad: responseStats.mad,
+          min_response: responseStats.min,
+          max_response: responseStats.max,
+          response_count: responseValues.length
+        };
+
+        return createSuccessResponse(stats);
+      } catch (error) {
+        logger.error(`Failed to get stats for endpoint ${id}: ${error}`, 'ENDPOINT');
+        set.status = 500;
+        return createErrorResponse('Failed to retrieve endpoint statistics');
+      }
+    }), {
+      params: t.Object({
+        id: t.String()
+      }),
+      query: t.Object({
+        range: t.Optional(t.String())
+      })
+    })
+
+    /**
+     * Get response times for an endpoint
+     * @param params.id - Endpoint ID
+     * @param query.limit - Maximum number of response times to return
+     * @returns Array of response time records
+     */
+    .get('/endpoints/:id/response-times', requireRole('user')(async ({ params, query }: any) => {
+      const { id } = params;
+      const limit = parseInt(query.limit) || 100;
+
+      const responseTimes = db.query(`
+        SELECT
+          response_time,
+          created_at,
+          status
+        FROM response_times
+        WHERE endpoint_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+      `).all(id, limit) as any[];
+
+      return createSuccessResponse(responseTimes);
+    }), {
+      params: t.Object({
+        id: t.String()
+      }),
+      query: t.Object({
+        limit: t.Optional(t.String())
+      })
+    })
+
+    /**
+     * Get heartbeats for an endpoint
+     * @param params.id - Endpoint ID
+     * @param query.limit - Maximum number of heartbeats to return
+     * @returns Array of heartbeat records
+     */
+    .get('/endpoints/:id/heartbeats', requireRole('user')(async ({ params, query }: any) => {
+      const { id } = params;
+      const limit = parseInt(query.limit) || 100;
+
+      const heartbeats = db.query(`
+        SELECT
+          response_time,
+          created_at,
+          status
+        FROM response_times
+        WHERE endpoint_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+      `).all(id, limit) as any[];
+
+      return createSuccessResponse(heartbeats);
+    }), {
+      params: t.Object({
+        id: t.String()
+      }),
+      query: t.Object({
+        limit: t.Optional(t.String())
+      })
+    })
+
+    /**
+     * Delete all heartbeats for an endpoint
+     * @param params.id - Endpoint ID
+     * @returns Success confirmation
+     */
+    .delete('/endpoints/:id/heartbeats', requireRole('admin')(async ({ params }: any) => {
+      const { id } = params;
+
+      // Delete all response times for this endpoint
+      db.run('DELETE FROM response_times WHERE endpoint_id = ?', [id]);
+
+      logger.info(`Cleared all heartbeat data for endpoint ID: ${id}`, 'ENDPOINT');
+
+      return createSuccessResponse({ message: 'Heartbeat data cleared successfully' });
+    }), {
+      params: t.Object({
+        id: t.String()
+      })
+    });
 }

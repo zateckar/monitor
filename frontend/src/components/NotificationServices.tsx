@@ -25,7 +25,7 @@ const NotificationServices: React.FC = () => {
   const [editingService, setEditingService] = useState<NotificationService | null>(null);
 
   useEffect(() => {
-    fetch('/api/notification-services')
+    fetch('/api/notifications/notification-services')
       .then(res => res.json())
       .then(setServices);
   }, []);
@@ -35,7 +35,7 @@ const NotificationServices: React.FC = () => {
   };
 
   const handleDelete = async (id: number) => {
-    await fetch(`/api/notification-services/${id}`, { method: 'DELETE' });
+    await fetch(`/api/notifications/notification-services/${id}`, { method: 'DELETE' });
     setServices(services.filter(s => s.id !== id));
   };
 
@@ -43,7 +43,7 @@ const NotificationServices: React.FC = () => {
     e.preventDefault();
     if (!editingService) return;
 
-    const url = editingService.id ? `/api/notification-services/${editingService.id}` : '/api/notification-services';
+    const url = editingService.id ? `/api/notifications/notification-services/${editingService.id}` : '/api/notifications/notification-services';
     const method = editingService.id ? 'PUT' : 'POST';
 
     const res = await fetch(url, {

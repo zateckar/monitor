@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -18,6 +18,7 @@ import PaletteIcon from '@mui/icons-material/Palette';
 import PublicIcon from '@mui/icons-material/Public';
 import PeopleIcon from '@mui/icons-material/People';
 import SecurityIcon from '@mui/icons-material/Security';
+import CloudIcon from '@mui/icons-material/Cloud';
 
 import NotificationSettings from './settings/NotificationSettings';
 import TimezoneSettings from './settings/TimezoneSettings';
@@ -26,6 +27,8 @@ import StylingSettings from './settings/StylingSettings';
 import StatusPagesSettings from './settings/StatusPagesSettings';
 import UserManagement from './settings/UserManagement';
 import OIDCSettings from './settings/OIDCSettings';
+import DistributedMonitoringSettings from './settings/DistributedMonitoringSettings';
+import FailoverConfigurationSettings from './settings/FailoverConfigurationSettings';
 import { useAuth } from '../contexts/AuthContext';
 
 interface SettingsProps {
@@ -69,6 +72,25 @@ function a11yProps(index: number) {
 const Settings: React.FC<SettingsProps> = ({ open, onClose }) => {
   const { user } = useAuth();
   const [tabValue, setTabValue] = useState(0);
+  const [currentRole, setCurrentRole] = useState<'standalone' | 'primary' | 'dependent'>('standalone');
+
+  useEffect(() => {
+    const loadInstanceRole = async () => {
+      try {
+        const response = await fetch('/api/system/distributed-config');
+        if (response.ok) {
+          const data = await response.json();
+          setCurrentRole(data.role || 'standalone');
+        }
+      } catch (error) {
+        console.error('Failed to load instance role:', error);
+      }
+    };
+
+    if (open) {
+      loadInstanceRole();
+    }
+  }, [open]);
 
   const handleTabChange = (_event: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue);
@@ -129,23 +151,37 @@ const Settings: React.FC<SettingsProps> = ({ open, onClose }) => {
               label="Styling" 
               {...a11yProps(3)} 
             />
-            <Tab 
-              icon={<PublicIcon />} 
-              label="Status Pages" 
-              {...a11yProps(4)} 
+            <Tab
+              icon={<PublicIcon />}
+              label="Status Pages"
+              {...a11yProps(4)}
             />
             {user?.role === 'admin' && (
-              <Tab 
-                icon={<SecurityIcon />} 
-                label="OIDC" 
-                {...a11yProps(5)} 
+              <Tab
+                icon={<CloudIcon />}
+                label="Distributed"
+                {...a11yProps(5)}
               />
             )}
             {user?.role === 'admin' && (
-              <Tab 
-                icon={<PeopleIcon />} 
-                label="Users" 
-                {...a11yProps(6)} 
+              <Tab
+                icon={<SecurityIcon />}
+                label="Failover"
+                {...a11yProps(6)}
+              />
+            )}
+            {user?.role === 'admin' && (
+              <Tab
+                icon={<SecurityIcon />}
+                label="OIDC"
+                {...a11yProps(7)}
+              />
+            )}
+            {user?.role === 'admin' && (
+              <Tab
+                icon={<PeopleIcon />}
+                label="Users"
+                {...a11yProps(8)}
               />
             )}
           </Tabs>
@@ -168,11 +204,21 @@ const Settings: React.FC<SettingsProps> = ({ open, onClose }) => {
         </TabPanel>
         {user?.role === 'admin' && (
           <TabPanel value={tabValue} index={5}>
-            <OIDCSettings />
+            <DistributedMonitoringSettings />
           </TabPanel>
         )}
         {user?.role === 'admin' && (
           <TabPanel value={tabValue} index={6}>
+            <FailoverConfigurationSettings currentRole={currentRole} />
+          </TabPanel>
+        )}
+        {user?.role === 'admin' && (
+          <TabPanel value={tabValue} index={7}>
+            <OIDCSettings />
+          </TabPanel>
+        )}
+        {user?.role === 'admin' && (
+          <TabPanel value={tabValue} index={8}>
             <UserManagement />
           </TabPanel>
         )}

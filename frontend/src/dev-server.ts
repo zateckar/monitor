@@ -10,9 +10,10 @@ serve({
   async fetch(req) {
     const url = new URL(req.url);
     
-    // Proxy API requests to backend
-    if (url.pathname.startsWith("/api")) {
+    // Proxy API and sync requests to backend
+    if (url.pathname.startsWith("/api") || url.pathname.startsWith("/sync")) {
       const backendUrl = `${BACKEND_URL}${url.pathname}${url.search}`;
+      console.log(`Proxying ${req.method} ${url.pathname} to ${backendUrl}`);
       return fetch(backendUrl, {
         method: req.method,
         headers: req.headers,
@@ -162,4 +163,4 @@ function getContentType(pathname: string): string {
 
 console.log(`🚀 Frontend development server running on http://localhost:${PORT}`);
 console.log(`📡 WebSocket server for hot reload on port ${PORT + 1}`);
-console.log(`🔗 Proxying /api requests to ${BACKEND_URL}`);
+console.log(`🔗 Proxying /api and /sync requests to ${BACKEND_URL}`);

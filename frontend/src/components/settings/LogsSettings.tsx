@@ -61,13 +61,20 @@ const LogsSettings: React.FC = () => {
   const loadLogs = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/logs');
+      const response = await fetch('/api/system/logs');
       if (response.ok) {
-        const data = await response.json();
-        setLogs(data);
+        const result = await response.json();
+        if (result.success) {
+          setLogs(result.data);
+        } else {
+          showAlert('error', result.error || 'Failed to load logs');
+        }
+      } else {
+        showAlert('error', 'Failed to load logs');
       }
     } catch (error) {
       console.error('Failed to load logs:', error);
+      showAlert('error', 'Failed to load logs');
     } finally {
       setLoading(false);
     }
@@ -76,13 +83,20 @@ const LogsSettings: React.FC = () => {
   const loadLogLevel = async () => {
     try {
       setLogLevelLoading(true);
-      const response = await fetch('/api/logs/level');
+      const response = await fetch('/api/system/logs/level');
       if (response.ok) {
-        const data = await response.json();
-        setLogLevel(data.level);
+        const result = await response.json();
+        if (result.success) {
+          setLogLevel(result.data.level);
+        } else {
+          showAlert('error', result.error || 'Failed to load log level');
+        }
+      } else {
+        showAlert('error', 'Failed to load log level');
       }
     } catch (error) {
       console.error('Failed to load log level:', error);
+      showAlert('error', 'Failed to load log level');
     } finally {
       setLogLevelLoading(false);
     }
@@ -90,10 +104,16 @@ const LogsSettings: React.FC = () => {
 
   const loadDatabaseStats = async () => {
     try {
-      const response = await fetch('/api/database/stats');
+      const response = await fetch('/api/system/database/stats');
       if (response.ok) {
-        const data = await response.json();
-        setDbStats(data);
+        const result = await response.json();
+        if (result.success) {
+          setDbStats(result.data);
+        } else {
+          showAlert('error', result.error || 'Failed to load database stats');
+        }
+      } else {
+        showAlert('error', 'Failed to load database stats');
       }
     } catch (error) {
       console.error('Failed to load database stats:', error);
@@ -102,12 +122,12 @@ const LogsSettings: React.FC = () => {
 
   const updateLogLevel = async (newLevel: string) => {
     try {
-      const response = await fetch('/api/logs/level', {
+      const response = await fetch('/api/system/logs/level', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ level: newLevel }),
       });
-      
+
       if (response.ok) {
         setLogLevel(newLevel);
         showAlert('success', 'Log level updated successfully');
@@ -121,7 +141,7 @@ const LogsSettings: React.FC = () => {
 
   const clearLogs = async () => {
     try {
-      const response = await fetch('/api/logs', { method: 'DELETE' });
+      const response = await fetch('/api/system/logs', { method: 'DELETE' });
       if (response.ok) {
         setLogs([]);
         showAlert('success', 'Logs cleared successfully');
@@ -137,7 +157,7 @@ const LogsSettings: React.FC = () => {
   const vacuumDatabase = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/database/vacuum', { method: 'POST' });
+      const response = await fetch('/api/system/database/vacuum', { method: 'POST' });
       if (response.ok) {
         showAlert('success', 'Database vacuum completed successfully');
         loadDatabaseStats(); // Reload stats to show updated size

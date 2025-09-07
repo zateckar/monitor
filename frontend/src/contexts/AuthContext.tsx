@@ -35,8 +35,8 @@ const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       });
       
       if (response.ok) {
-        const userData = await response.json();
-        setUser(userData);
+        const responseData = await response.json();
+        setUser(responseData.data); // For /me endpoint, user data is directly in data
       } else {
         setUser(null);
       }
@@ -63,7 +63,7 @@ const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const data = await response.json();
 
       if (response.ok && data.success) {
-        setUser(data.user);
+        setUser(data.data.user); // For login endpoint, user data is nested in data.user
         return data;
       } else {
         throw new Error(data.error || 'Login failed');

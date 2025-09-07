@@ -8,6 +8,7 @@ import {
 } from '@dnd-kit/utilities';
 import type { Endpoint } from '../types';
 import HeartbeatVisualization from './HeartbeatVisualization';
+import MultiLocationStatus from './MultiLocationStatus';
 
 interface EndpointListItemProps {
   endpoint: Endpoint;
@@ -16,6 +17,7 @@ interface EndpointListItemProps {
   onTogglePause?: (id: number) => void;
   isDraggable?: boolean;
   onContextMenu?: (event: React.MouseEvent) => void;
+  showMultiLocation?: boolean;
 }
 
 const EndpointListItem: React.FC<EndpointListItemProps> = ({
@@ -23,7 +25,8 @@ const EndpointListItem: React.FC<EndpointListItemProps> = ({
   onSelect,
   isSelected,
   isDraggable = false,
-  onContextMenu
+  onContextMenu,
+  showMultiLocation = true
 }) => {
   const {
     attributes,
@@ -129,12 +132,20 @@ const EndpointListItem: React.FC<EndpointListItemProps> = ({
             </Box>
             {!endpoint.paused && typeof endpoint.id === 'number' && (
               <Box sx={{ display: 'flex', justifyContent: 'flex-start' }}>
-                <HeartbeatVisualization 
-                  endpointId={endpoint.id} 
-                  size="small" 
+                <HeartbeatVisualization
+                  endpointId={endpoint.id}
+                  size="small"
                   maxCount={80}
                 />
               </Box>
+            )}
+            {!endpoint.paused && typeof endpoint.id === 'number' && showMultiLocation && (
+              <MultiLocationStatus
+                endpointId={endpoint.id}
+                size="small"
+                showLocationDetails={false}
+                isSelected={isSelected}
+              />
             )}
           </CardContent>
         </CardActionArea>

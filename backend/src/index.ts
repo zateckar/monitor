@@ -14,18 +14,23 @@ import { LoggerService } from './services/logger';
 import { OIDCService } from './services/oidc';
 import { KafkaService } from './services/kafka';
 import { MonitoringService } from './services/monitoring';
+import { DistributedMonitoringService } from './services/distributed-monitoring';
+import { ConfigurationService } from './services/configuration';
+import { SynchronizationService } from './services/synchronization';
+import { FailoverManager } from './services/failover';
 import { NotificationService } from './services/notifications';
 import { DomainInfoService } from './services/domain-info';
 import { CertificateService } from './services/certificate';
 import { StatusPageService } from './services/status-pages';
+import { DatabaseService } from './services/database';
 
-// Import route handlers
-import { createAuthRoutes, createAuthMiddleware } from './routes/auth';
-import { createEndpointsRoutes } from './routes/endpoints';
-import { createUserRoutes } from './routes/users';
-import { createOIDCRoutes } from './routes/oidc';
-import { createPreferencesRoutes } from './routes/preferences';
-import { createStatusPageRoutes } from './routes/status-pages';
+// Import new route registration system
+import { RouteAutoRegistry } from './utils/route-registry';
+import { createGlobalErrorHandler } from './utils/error-handler';
+import { apiVersionMiddleware } from './utils/api-versioning';
+
+// Import service container
+import { ServiceContainer } from './services/service-container';
 
 async function main() {
   // Initialize database
@@ -33,6 +38,7 @@ async function main() {
 
   // Initialize services
   const logger = new LoggerService(db);
+  const databaseService = new DatabaseService(db, logger);
   const authService = new AuthService(db);
   const oidcService = new OIDCService(db, logger);
   const kafkaService = new KafkaService(db, logger);
@@ -41,276 +47,122 @@ async function main() {
   const certificateService = new CertificateService(logger);
   const statusPageService = new StatusPageService(db, logger);
   
-  // Create monitoring service with notification callback
-  const monitoringService = new MonitoringService(
-    db, 
-    logger, 
+  // Initialize distributed monitoring services
+  const configService = new ConfigurationService(db, logger);
+  const syncService = new SynchronizationService(db, configService, logger);
+  const failoverManager = new FailoverManager(db, configService, syncService, logger);
+  
+  // Create distributed monitoring service with notification callback
+  const distributedMonitoringService = new DistributedMonitoringService(
+    db,
+    logger,
     kafkaService,
     domainInfoService,
     certificateService,
-    (endpoint: any, status: string) => notificationService.sendNotification(endpoint, status)
+    (endpoint: any, status: string) => notificationService.sendNotification(endpoint, status),
+    configService,
+    syncService,
+    failoverManager
   );
 
+  // Log instance configuration
+  configService.logCurrentConfiguration();
   logger.info('Starting Endpoint Monitor application', 'SYSTEM');
 
   // Create default admin user if none exists
   await authService.createDefaultAdminUser();
 
-  // Create authentication middleware
-  console.log('Creating auth middleware...');
-  const authMiddleware = createAuthMiddleware(authService);
-  console.log('Auth middleware created:', authMiddleware);
-  console.log('Auth middleware keys:', Object.keys(authMiddleware));
-  
-  // Access properties directly instead of destructuring
-  const requireAuth = authMiddleware.requireAuth;
-  const requireRole = authMiddleware.requireRole;
-  
-  console.log('Direct access requireAuth:', typeof requireAuth);
-  console.log('Direct access requireRole:', typeof requireRole);
-  
-  // Debug: Verify middleware functions are available
-  if (!requireAuth || !requireRole) {
-    throw new Error(`Auth middleware not properly created: requireAuth=${typeof requireAuth}, requireRole=${typeof requireRole}`);
-  }
+  // Create service container to simplify parameter passing
+  const services = ServiceContainer.create(
+    db,
+    logger,
+    databaseService,
+    authService,
+    oidcService,
+    kafkaService,
+    notificationService,
+    domainInfoService,
+    certificateService,
+    statusPageService,
+    configService,
+    syncService,
+    failoverManager,
+    distributedMonitoringService,
+    undefined, // requireAuth will be set later
+    undefined  // requireRole will be set later
+  );
 
-  console.log('Creating Elysia app...');
-  console.log('About to call createEndpointsRoutes with:');
-  console.log('  requireAuth:', typeof requireAuth);
-  console.log('  requireRole:', typeof requireRole);
-  
-  const app = new Elysia()
+  // Initialize route registry with auto-discovery
+  const routeRegistry = RouteAutoRegistry.getInstance();
+  await routeRegistry.autoDiscoverRoutes();
+
+  // Create authentication middleware (keeping for backward compatibility)
+  const { createAuthMiddleware } = await import('./routes/auth');
+  const authMiddleware = createAuthMiddleware(services);
+  const requireAuth = authMiddleware?.requireAuth;
+  const requireRole = authMiddleware?.requireRole;
+
+  // Update service container with middleware functions
+  services.requireAuth = requireAuth;
+  services.requireRole = requireRole;
+
+  logger.info(`Auto-discovered ${routeRegistry.getStats().totalRoutes} route modules`, 'SYSTEM');
+
+  // Create main application with auto-discovered routes
+  const app = await routeRegistry.createApp(services);
+
+  // Add global middleware and static file serving
+  app
     .use(cors())
-    // Mount route handlers
-    .use(createAuthRoutes(authService, logger))
-    .use(createEndpointsRoutes(db, authService, logger, monitoringService, domainInfoService, certificateService, requireAuth, requireRole))
-    .use(createUserRoutes(db, authService, logger, requireRole))
-    .use(createOIDCRoutes(db, oidcService, authService, logger, requireRole))
-    .use(createPreferencesRoutes(db, requireRole))
-    .use(createStatusPageRoutes(statusPageService, logger, requireRole))
-    
-    // Notification services API
-    .get('/api/notification-services', async () => {
-      return notificationService.getNotificationServices();
+    .use(apiVersionMiddleware())
+    .onError(({ code, error, set }: any) => {
+      logger.error(`Request error: ${error.message}`, 'ERROR_HANDLER');
+      set.status = 500;
+      return { success: false, error: error.message };
     })
-    .post('/api/notification-services', requireRole('admin')(async ({ body }: any) => {
-      const { name, type, config } = body;
-      return notificationService.createNotificationService(name, type, config);
-    }), {
-      body: t.Object({
-        name: t.String({ minLength: 1 }),
-        type: t.String({ minLength: 1 }),
-        config: t.Record(t.String(), t.Unknown())
-      })
-    })
-    .put('/api/notification-services/:id', requireRole('admin')(async ({ params, body }: any) => {
-      const { id } = params;
-      const { name, type, config } = body;
-      return notificationService.updateNotificationService(parseInt(id), name, type, config);
-    }), {
-      body: t.Object({
-        name: t.String({ minLength: 1 }),
-        type: t.String({ minLength: 1 }),
-        config: t.Record(t.String(), t.Unknown())
-      })
-    })
-    .delete('/api/notification-services/:id', requireRole('admin')(async ({ params }: any) => {
-      const { id } = params;
-      notificationService.deleteNotificationService(parseInt(id));
-      return { id };
-    }))
-    .get('/api/endpoints/:id/notification-services', async ({ params }: any) => {
-      const { id } = params;
-      return notificationService.getEndpointNotificationServices(parseInt(id));
-    })
-    .post('/api/endpoints/:id/notification-services', requireRole('admin')(async ({ params, body }: any) => {
-      const { id } = params;
-      const { serviceId } = body;
-      notificationService.addNotificationServiceToEndpoint(parseInt(id), serviceId);
-      return { monitor_id: id, notification_service_id: serviceId };
-    }), {
-      body: t.Object({
-        serviceId: t.Number()
-      })
-    })
-    .delete('/api/endpoints/:id/notification-services/:serviceId', requireRole('admin')(async ({ params }: any) => {
-      const { id, serviceId } = params;
-      notificationService.removeNotificationServiceFromEndpoint(parseInt(id), parseInt(serviceId));
-      return { monitor_id: id, notification_service_id: serviceId };
-    }))
-    
-    // OIDC Authentication API
-    .get('/api/auth/oidc/providers', async () => {
-      return oidcService.getProviders();
-    })
-    
-    // Application logs API
-    .get('/api/logs', requireRole('admin')(async () => {
-      return logger.getLogs();
-    }))
-    .delete('/api/logs', requireRole('admin')(async () => {
-      logger.clearLogs();
-      return { success: true };
-    }))
-    .get('/api/logs/level', requireRole('admin')(async () => {
-      return { level: logger.getLogLevel() };
-    }))
-    .put('/api/logs/level', requireRole('admin')(async ({ body }: any) => {
-      const { level } = body;
-      console.log('PUT /api/logs/level called with level:', level);
-      logger.setLogLevel(level);
-      console.log('After setLogLevel, current level is:', logger.getLogLevel());
-      return { level };
-    }), {
-      body: t.Object({
-        level: t.String({ minLength: 1 })
-      })
-    })
-    
-    // Certificate testing API for debugging
-    .post('/api/debug/certificate', requireRole('admin')(async ({ body, set }: any) => {
-      try {
-        const { url } = body;
-        
-        await logger.info(`Manual certificate check requested for: ${url}`, 'CERTIFICATE_DEBUG');
-        
-        const result = await certificateService.getCertificateExpiry(url);
-        
-        if (result.success) {
-          await logger.info(`Certificate check successful for ${url}`, 'CERTIFICATE_DEBUG');
-          return {
-            success: true,
-            url,
-            certificate: {
-              daysRemaining: result.result.daysRemaining,
-              validFrom: result.result.validFrom.toISOString(),
-              validTo: result.result.validTo.toISOString(),
-              issuer: result.result.issuer,
-              subject: result.result.subject
-            }
-          };
-        } else {
-          await logger.warn(`Certificate check failed for ${url}: ${result.error.error}`, 'CERTIFICATE_DEBUG');
-          return {
-            success: false,
-            url,
-            error: result.error
-          };
-        }
-        
-      } catch (error) {
-        await logger.error(`Unexpected error in certificate debug endpoint: ${error}`, 'CERTIFICATE_DEBUG');
-        set.status = 500;
-        return { 
-          success: false, 
-          error: {
-            error: 'Internal server error',
-            details: error instanceof Error ? error.message : 'Unknown error'
-          }
-        };
-      }
-    }), {
-      body: t.Object({
-        url: t.String({ minLength: 1 })
-      })
-    })
-    
-    // Database management API
-    .get('/api/database/stats', requireRole('admin')(async () => {
-      try {
-        // Get database file size
-        const dbFile = Bun.file(path.join(import.meta.dir, '..', 'db.sqlite'));
-        const dbSizeBytes = await dbFile.size;
-        const dbSizeMB = (dbSizeBytes / (1024 * 1024)).toFixed(2);
-        
-        // Get table information
-        const tables = db.query(`
-          SELECT name 
-          FROM sqlite_master 
-          WHERE type='table' AND name NOT LIKE 'sqlite_%'
-          ORDER BY name
-        `).all() as any[];
-
-        const tableStats = tables.map(table => {
-          try {
-            // Get row count for each table
-            const rowCount = db.query(`SELECT COUNT(*) as count FROM "${table.name}"`).get() as any;
-            
-            // Calculate approximate table size (this is an estimation)
-            const tableInfo = db.query(`PRAGMA table_info("${table.name}")`).all() as any[];
-            const avgRowSize = tableInfo.length * 50; // Rough estimate: 50 bytes per column
-            const estimatedSizeBytes = rowCount.count * avgRowSize;
-            const estimatedSizeKB = (estimatedSizeBytes / 1024).toFixed(2);
-            const estimatedSizeKBNum = parseFloat(estimatedSizeKB);
-            
-            return {
-              name: table.name,
-              rows: rowCount.count,
-              size: estimatedSizeKBNum < 1024 ? `${estimatedSizeKB} KB` : `${(estimatedSizeBytes / (1024 * 1024)).toFixed(2)} MB`
-            };
-          } catch (err) {
-            // If there's an error querying a specific table, return minimal info
-            return {
-              name: table.name,
-              rows: 0,
-              size: '0 KB'
-            };
-          }
-        });
-
-        const dbSizeMBNum = parseFloat(dbSizeMB);
-        return {
-          size: dbSizeMBNum < 1024 ? `${dbSizeMB} MB` : `${(dbSizeBytes / (1024 * 1024 * 1024)).toFixed(2)} GB`,
-          tables: tableStats
-        };
-      } catch (error) {
-        logger.error(`Error getting database stats: ${error}`, 'DATABASE');
-        return {
-          size: 'Unknown',
-          tables: []
-        };
-      }
-    }))
-    .post('/api/database/vacuum', requireRole('admin')(async () => {
-      try {
-        // Run VACUUM command to optimize database
-        db.exec('VACUUM');
-        logger.info('Database vacuum completed successfully', 'DATABASE');
-        return { success: true, message: 'Database vacuum completed successfully' };
-      } catch (error) {
-        logger.error(`Database vacuum failed: ${error}`, 'DATABASE');
-        throw new Error(`Database vacuum failed: ${error}`);
-      }
-    }))
-    
-    // Static file serving (fallback for SPA)
-    .get('/*', async ({ request, set }) => {
+    .get('/*', async ({ request, set }: any) => {
+      // Static file serving (fallback for SPA) - exclude API routes
       const url = new URL(request.url);
+
+      console.log('CATCH-ALL ROUTE CALLED for path:', url.pathname);
+
+      // Skip API routes - let them fall through to proper handlers
+      if (url.pathname.startsWith('/api/')) {
+        console.log('CATCH-ALL: Skipping API route:', url.pathname);
+        console.log('CATCH-ALL: This should not happen if specific routes are working');
+        console.log('CATCH-ALL: Available routes on app:', Object.keys((app as any).routes || {}));
+        set.status = 404;
+        return new Response(JSON.stringify({ error: 'API route not found', path: url.pathname }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
       const assetPath = url.pathname === '/' ? 'index.html' : url.pathname.substring(1);
       const filePath = path.join(import.meta.dir, '..', '..', 'frontend', 'dist', assetPath);
 
       const file = Bun.file(filePath);
-      
+
       if (await file.exists()) {
         try {
           const stats = await stat(filePath);
           const lastModified = stats.mtime.toUTCString();
           const etag = `"${createHash('md5').update(`${stats.size}-${stats.mtime.getTime()}`).digest('hex')}"`;
-          
+
           // Check if client has cached version (304 Not Modified)
           const ifNoneMatch = request.headers.get('if-none-match');
           const ifModifiedSince = request.headers.get('if-modified-since');
-          
+
           if (ifNoneMatch === etag || ifModifiedSince === lastModified) {
             set.status = 304;
             return new Response(null, { status: 304 });
           }
-          
+
           // Determine file type and set appropriate cache headers and Content-Type
           const ext = path.extname(filePath).toLowerCase();
           let cacheControl: string;
           let contentType: string;
-          
+
           // Set Content-Type based on file extension
           switch (ext) {
             case '.html':
@@ -365,7 +217,7 @@ async function main() {
             default:
               contentType = 'application/octet-stream';
           }
-          
+
           if (['.js', '.css', '.woff', '.woff2', '.ttf', '.eot'].includes(ext)) {
             // Long cache for hashed assets (1 year)
             cacheControl = 'public, max-age=31536000, immutable';
@@ -376,7 +228,7 @@ async function main() {
             // Short cache for HTML and other files (1 hour)
             cacheControl = 'public, max-age=3600';
           }
-          
+
           // Set security and performance headers
           const headers: Record<string, string> = {
             'Content-Type': contentType,
@@ -387,25 +239,25 @@ async function main() {
             'X-Frame-Options': 'DENY',
             'X-XSS-Protection': '1; mode=block'
           };
-          
+
           // Add compression for text-based files
           const acceptEncoding = request.headers.get('accept-encoding') || '';
           const isCompressible = ['.js', '.css', '.html', '.json', '.xml', '.txt', '.svg'].includes(ext);
-          
+
           if (isCompressible && acceptEncoding.includes('gzip')) {
             try {
               const fileContent = await file.arrayBuffer();
               const compressed = gzipSync(new Uint8Array(fileContent));
               headers['Content-Encoding'] = 'gzip';
               headers['Content-Length'] = compressed.length.toString();
-              
+
               return new Response(compressed, { headers });
             } catch (compressionError) {
               // Fall back to uncompressed if compression fails
               console.warn('Compression failed, serving uncompressed:', compressionError);
             }
           }
-          
+
           return new Response(file, { headers });
         } catch (error) {
           // If stat fails, serve file without caching headers
@@ -417,7 +269,7 @@ async function main() {
       // Fallback to index.html for SPA routing (with appropriate headers)
       const indexPath = path.join(import.meta.dir, '..', '..', 'frontend', 'dist', 'index.html');
       const indexFile = Bun.file(indexPath);
-      
+
       if (await indexFile.exists()) {
         const headers = {
           'Cache-Control': 'public, max-age=3600',
@@ -425,22 +277,26 @@ async function main() {
           'X-Frame-Options': 'DENY',
           'X-XSS-Protection': '1; mode=block'
         };
-        
+
         return new Response(indexFile, { headers });
       }
-      
+
       // Final fallback - 404
       set.status = 404;
       return new Response('Not Found', { status: 404 });
     })
     .listen(3001);
 
+  console.log('=== REGISTERED ROUTES ===');
+  console.log('App routes:', (app as any).routes);
+  console.log('==========================');
+
   console.log(
     `🦊 Elysia is running at http://${app.server?.hostname}:${app.server?.port}`
   );
 
-  // Start monitoring all endpoints
-  await monitoringService.initializeMonitoring();
+  // Start distributed monitoring
+  await distributedMonitoringService.initializeMonitoring();
 }
 
 main();

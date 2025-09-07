@@ -25,12 +25,13 @@ export class MonitoringService {
   private certificateTimers = new Map<number, NodeJS.Timeout>();
 
   constructor(
-    private db: Database, 
-    private logger: LoggerService, 
+    private db: Database,
+    private logger: LoggerService,
     private kafkaService: KafkaService,
     private domainInfoService: DomainInfoService,
     private certificateService: CertificateService,
-    private sendNotification: (endpoint: Endpoint, status: string) => Promise<void>
+    private sendNotification: (endpoint: Endpoint, status: string) => Promise<void>,
+    private onEndpointChecked?: (endpoint: Endpoint) => Promise<void>
   ) {}
 
   // Create fetch options with TLS configuration for mTLS
@@ -114,13 +115,49 @@ export class MonitoringService {
   // Check if response contains required keyword
   private async checkKeyword(response: Response, keyword?: string | null): Promise<boolean> {
     if (!keyword?.trim()) return true;
-    
+
     try {
       const text = await response.text();
       return text.includes(keyword);
     } catch (error) {
       this.logger.warn(`Error reading response text for keyword search: ${error}`, 'MONITORING');
       return false;
+    }
+  }
+
+  // Handle outage record creation for DOWN status
+  private async createOutage(endpoint: Endpoint, failureReason: string): Promise<void> {
+    try {
+      const now = new Date().toISOString();
+      this.db.exec(
+        `INSERT INTO outages (endpoint_id, started_at, reason, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        [endpoint.id, now, failureReason, now, now]
+      );
+      await this.logger.info(`Created outage record for endpoint ${endpoint.id}: ${failureReason}`, 'MONITORING');
+    } catch (error) {
+      await this.logger.error(`Failed to create outage record for endpoint ${endpoint.id}: ${error}`, 'MONITORING');
+    }
+  }
+
+  // Handle outage record update for UP status
+  private async resolveOutage(endpoint: Endpoint): Promise<void> {
+    try {
+      const now = new Date().toISOString();
+      // Find the most recent ongoing outage for this endpoint
+      const ongoingOutage = this.db.query(
+        `SELECT id FROM outages WHERE endpoint_id = ? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1`
+      ).get(endpoint.id) as { id: number } | undefined;
+
+      if (ongoingOutage) {
+        this.db.exec(
+          `UPDATE outages SET ended_at = ?, updated_at = ? WHERE id = ?`,
+          [now, now, ongoingOutage.id]
+        );
+        await this.logger.info(`Resolved outage record ${ongoingOutage.id} for endpoint ${endpoint.id}`, 'MONITORING');
+      }
+    } catch (error) {
+      await this.logger.error(`Failed to resolve outage record for endpoint ${endpoint.id}: ${error}`, 'MONITORING');
     }
   }
 
@@ -381,10 +418,12 @@ export class MonitoringService {
         if (endpoint.status !== 'UP') {
           await this.logger.info(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) recovered - status changed from ${endpoint.status} to UP`, 'MONITORING');
           await this.sendNotification(endpoint, 'UP');
+          // Resolve any ongoing outage
+          await this.resolveOutage(endpoint);
         } else {
           await this.logger.debug(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) check successful - response time: ${responseTime}ms`, 'MONITORING');
         }
-        
+
         this.db.run('UPDATE endpoints SET status = ?, failed_attempts = 0, last_checked = CURRENT_TIMESTAMP WHERE id = ?', ['UP', endpoint.id]);
         this.db.run('INSERT INTO response_times (endpoint_id, response_time, status, failure_reason) VALUES (?, ?, ?, ?)', [endpoint.id, responseTime, 'UP', null]);
       } else {
@@ -401,6 +440,8 @@ export class MonitoringService {
         if (endpoint.status !== 'DOWN') {
           await this.logger.error(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) failed after ${newFailedAttempts} attempts - status changed to DOWN. Error: ${error}`, 'MONITORING');
           await this.sendNotification(endpoint, 'DOWN');
+          // Create outage record for DOWN transition
+          await this.createOutage(endpoint, categorizedReason);
         } else {
           await this.logger.warn(`Endpoint "${endpoint.name}" (ID: ${endpoint.id}) check failed (attempt ${newFailedAttempts}). Error: ${error}`, 'MONITORING');
         }
@@ -410,8 +451,17 @@ export class MonitoringService {
         this.db.run('UPDATE endpoints SET failed_attempts = ?, last_checked = CURRENT_TIMESTAMP WHERE id = ?', [newFailedAttempts, endpoint.id]);
       }
       this.db.run('INSERT INTO response_times (endpoint_id, response_time, status, failure_reason) VALUES (?, ?, ?, ?)', [endpoint.id, responseTime, 'DOWN', categorizedReason]);
-    }
-  }
+     }
+
+     // Call the callback if provided (for distributed monitoring)
+     if (this.onEndpointChecked) {
+       try {
+         await this.onEndpointChecked(endpoint);
+       } catch (callbackError) {
+         await this.logger.error(`Error in endpoint check callback for endpoint ${endpoint.id}: ${callbackError}`, 'MONITORING');
+       }
+     }
+   }
 
   // Function to check certificate expiration for a single endpoint
   async checkCertificateExpiry(endpoint: Endpoint): Promise<void> {

@@ -33,7 +33,7 @@ import WarningIcon from '@mui/icons-material/Warning';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CloseIcon from '@mui/icons-material/Close';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import type { CertificateChain, CertificateInfo, EnhancedDomainInfo } from '../types';
+import type { CertificateChain, CertificateInfo, DomainInfo } from '../types';
 import { formatDateTime } from '../utils/timezone';
 
 interface CertificateModalProps {
@@ -41,6 +41,8 @@ interface CertificateModalProps {
   onClose: () => void;
   endpointId: number | string;
   endpointName: string;
+  domainInfo: DomainInfo | null;
+  domainLoading: boolean;
 }
 
 const CertificateModal: React.FC<CertificateModalProps> = ({
@@ -48,13 +50,12 @@ const CertificateModal: React.FC<CertificateModalProps> = ({
   onClose,
   endpointId,
   endpointName,
+  domainInfo,
+  domainLoading,
 }) => {
   const [loading, setLoading] = useState(false);
-  const [domainLoading, setDomainLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [domainError, setDomainError] = useState<string | null>(null);
   const [certificateChain, setCertificateChain] = useState<CertificateChain | null>(null);
-  const [enhancedDomainInfo, setEnhancedDomainInfo] = useState<EnhancedDomainInfo | null>(null);
   const [activeTab, setActiveTab] = useState(0);
 
   const fetchCertificateChain = useCallback(async () => {
@@ -69,8 +70,12 @@ const CertificateModal: React.FC<CertificateModalProps> = ({
         throw new Error(errorData.error || 'Failed to fetch certificate chain');
       }
       
-      const data = await response.json();
-      setCertificateChain(data);
+      const result = await response.json();
+      if (result.success) {
+        setCertificateChain(result.data);
+      } else {
+        throw new Error(result.error || 'Failed to fetch certificate chain');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch certificate chain');
     } finally {
@@ -78,39 +83,15 @@ const CertificateModal: React.FC<CertificateModalProps> = ({
     }
   }, [endpointId]);
 
-  const fetchEnhancedDomainInfo = useCallback(async () => {
-    setDomainLoading(true);
-    setDomainError(null);
-    
-    try {
-      const response = await fetch(`/api/endpoints/${endpointId}/enhanced-domain-info`);
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to fetch domain information');
-      }
-      
-      const data = await response.json();
-      setEnhancedDomainInfo(data);
-    } catch (err) {
-      setDomainError(err instanceof Error ? err.message : 'Failed to fetch domain information');
-    } finally {
-      setDomainLoading(false);
-    }
-  }, [endpointId]);
-
   useEffect(() => {
     if (open && endpointId) {
       fetchCertificateChain();
-      fetchEnhancedDomainInfo();
     }
-  }, [open, endpointId, fetchCertificateChain, fetchEnhancedDomainInfo]);
+  }, [open, endpointId, fetchCertificateChain]);
 
   const handleClose = () => {
     setCertificateChain(null);
-    setEnhancedDomainInfo(null);
     setError(null);
-    setDomainError(null);
     setActiveTab(0);
     onClose();
   };
@@ -124,29 +105,16 @@ const CertificateModal: React.FC<CertificateModalProps> = ({
       return (
         <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', py: 4 }}>
           <CircularProgress />
-          <Typography variant="body1" sx={{ ml: 2 }}>
+          <Typography variant='body1' sx={{ ml: 2 }}>
             Loading domain information...
           </Typography>
         </Box>
       );
     }
 
-    if (domainError) {
+    if (!domainInfo) {
       return (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          <Typography variant="h6" gutterBottom>
-            Failed to load domain information
-          </Typography>
-          <Typography variant="body2">
-            {domainError}
-          </Typography>
-        </Alert>
-      );
-    }
-
-    if (!enhancedDomainInfo) {
-      return (
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant='body2' color='text.secondary'>
           No domain information available
         </Typography>
       );
@@ -155,46 +123,54 @@ const CertificateModal: React.FC<CertificateModalProps> = ({
     return (
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         {/* Domain Registration Info */}
-        <Card variant="outlined">
+        <Card variant='outlined'>
           <CardContent>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-              <LanguageIcon color="primary" />
-              <Typography variant="h6">Domain Registration</Typography>
+              <LanguageIcon color='primary' />
+              <Typography variant='h6'>Domain Registration</Typography>
             </Box>
             
             <List dense>
-              {enhancedDomainInfo.domain.creationDate && (
+              {domainInfo.registrar && (
                 <ListItem>
                   <ListItemText
-                    primary="Created"
-                    secondary={formatDateTime(enhancedDomainInfo.domain.creationDate)}
+                    primary='Registrar'
+                    secondary={domainInfo.registrar}
                   />
                 </ListItem>
               )}
-              {enhancedDomainInfo.domain.updatedDate && (
+              {domainInfo.creationDate && (
                 <ListItem>
                   <ListItemText
-                    primary="Updated"
-                    secondary={formatDateTime(enhancedDomainInfo.domain.updatedDate)}
+                    primary='Created'
+                    secondary={formatDateTime(domainInfo.creationDate)}
                   />
                 </ListItem>
               )}
-              {enhancedDomainInfo.domain.expiryDate && (
+              {domainInfo.updatedDate && (
                 <ListItem>
                   <ListItemText
-                    primary="Expires"
+                    primary='Updated'
+                    secondary={formatDateTime(domainInfo.updatedDate)}
+                  />
+                </ListItem>
+              )}
+              {domainInfo.expiryDate && (
+                <ListItem>
+                  <ListItemText
+                    primary='Expires'
                     secondary={
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Typography variant="body2" component="span">
-                          {formatDateTime(enhancedDomainInfo.domain.expiryDate)}
+                        <Typography variant='body2' component='span'>
+                          {formatDateTime(domainInfo.expiryDate)}
                         </Typography>
-                        {enhancedDomainInfo.domain.daysRemaining !== null && (
+                        {domainInfo.daysRemaining !== null && (
                           <Chip
-                            label={`${enhancedDomainInfo.domain.daysRemaining} days`}
-                            size="small"
+                            label={`${domainInfo.daysRemaining} days`}
+                            size='small'
                             color={
-                              enhancedDomainInfo.domain.daysRemaining <= 14 ? 'error' :
-                              enhancedDomainInfo.domain.daysRemaining <= 45 ? 'warning' : 'success'
+                              domainInfo.daysRemaining <= 14 ? 'error' :
+                              domainInfo.daysRemaining <= 45 ? 'warning' : 'success'
                             }
                           />
                         )}
@@ -203,144 +179,21 @@ const CertificateModal: React.FC<CertificateModalProps> = ({
                   />
                 </ListItem>
               )}
+              {domainInfo.status && domainInfo.status.length > 0 && (
+                <ListItem>
+                  <ListItemText
+                    primary='Status'
+                    secondary={
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1 }}>
+                        {domainInfo.status.map((s, i) => <Chip key={i} label={s} size='small' />)}
+                      </Box>
+                    }
+                  />
+                </ListItem>
+              )}
             </List>
           </CardContent>
         </Card>
-
-        {/* DNS Information */}
-        {enhancedDomainInfo.dns && (
-          <Card variant="outlined">
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                <DnsIcon color="secondary" />
-                <Typography variant="h6">DNS Records</Typography>
-              </Box>
-              
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                {enhancedDomainInfo.dns.A.length > 0 && (
-                  <Box>
-                    <Typography variant="subtitle2" gutterBottom>A Records</Typography>
-                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                      {enhancedDomainInfo.dns.A.map((ip, idx) => (
-                        <Chip key={idx} label={ip} size="small" variant="outlined" />
-                      ))}
-                    </Box>
-                  </Box>
-                )}
-                
-                {enhancedDomainInfo.dns.CNAME && (
-                  <Box>
-                    <Typography variant="subtitle2" gutterBottom>CNAME</Typography>
-                    <Chip label={enhancedDomainInfo.dns.CNAME} size="small" variant="outlined" />
-                  </Box>
-                )}
-                
-                {enhancedDomainInfo.dns.MX.length > 0 && (
-                  <Box>
-                    <Typography variant="subtitle2" gutterBottom>MX Records</Typography>
-                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                      {enhancedDomainInfo.dns.MX.map((mx, idx) => (
-                        <Chip 
-                          key={idx} 
-                          label={`${mx.priority} ${mx.exchange}`} 
-                          size="small" 
-                          variant="outlined" 
-                        />
-                      ))}
-                    </Box>
-                  </Box>
-                )}
-                
-                {enhancedDomainInfo.dns.NS.length > 0 && (
-                  <Box>
-                    <Typography variant="subtitle2" gutterBottom>Name Servers</Typography>
-                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                      {enhancedDomainInfo.dns.NS.map((ns, idx) => (
-                        <Chip key={idx} label={ns} size="small" variant="outlined" />
-                      ))}
-                    </Box>
-                  </Box>
-                )}
-                
-                {enhancedDomainInfo.dns.TXT.length > 0 && (
-                  <Box>
-                    <Typography variant="subtitle2" gutterBottom>TXT Records</Typography>
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                      {enhancedDomainInfo.dns.TXT.map((txt, idx) => (
-                        <Box key={idx} sx={{ 
-                          p: 1, 
-                          bgcolor: 'action.hover', 
-                          borderRadius: 1,
-                          fontFamily: 'monospace',
-                          fontSize: '0.75rem',
-                          wordBreak: 'break-all'
-                        }}>
-                          {txt}
-                        </Box>
-                      ))}
-                    </Box>
-                  </Box>
-                )}
-              </Box>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Server Information */}
-        {enhancedDomainInfo.server && (
-          <Card variant="outlined">
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                <StorageIcon color="info" />
-                <Typography variant="h6">Server Information</Typography>
-              </Box>
-              
-              <List dense>
-                {enhancedDomainInfo.server.httpStatus && (
-                  <ListItem>
-                    <ListItemText
-                      primary="HTTP Status"
-                      secondary={
-                        <Chip
-                          label={enhancedDomainInfo.server.httpStatus}
-                          size="small"
-                          color={
-                            enhancedDomainInfo.server.httpStatus >= 200 && enhancedDomainInfo.server.httpStatus < 300 
-                              ? 'success' 
-                              : enhancedDomainInfo.server.httpStatus >= 300 && enhancedDomainInfo.server.httpStatus < 400
-                              ? 'warning'
-                              : 'error'
-                          }
-                        />
-                      }
-                    />
-                  </ListItem>
-                )}
-                {enhancedDomainInfo.server.serverHeader && (
-                  <ListItem>
-                    <ListItemText
-                      primary="Server"
-                      secondary={
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <Typography variant="body2" component="span" sx={{ fontFamily: 'monospace' }}>
-                            {enhancedDomainInfo.server.serverHeader}
-                          </Typography>
-                          <IconButton
-                            size="small"
-                            onClick={() => copyToClipboard(enhancedDomainInfo.server!.serverHeader!)}
-                            title="Copy to clipboard"
-                          >
-                            <ContentCopyIcon fontSize="small" />
-                          </IconButton>
-                        </Box>
-                      }
-                    />
-                  </ListItem>
-                )}
-              </List>
-            </CardContent>
-          </Card>
-        )}
       </Box>
     );
   };

@@ -47,15 +47,32 @@ const OutageHistory: React.FC<OutageHistoryProps> = ({ endpointId }) => {
     const fetchOutages = async () => {
       try {
         setLoading(true);
+        console.log(`[DEBUG] Fetching outages for endpoint ${endpointId}`);
         const response = await fetch(`/api/endpoints/${endpointId}/outages`);
+        console.log(`[DEBUG] Response status for endpoint ${endpointId}:`, response.status, response.statusText);
+        
         if (!response.ok) {
-          throw new Error('Failed to fetch outage history');
+          throw new Error(`Failed to fetch outage history: ${response.status} ${response.statusText}`);
         }
+        
         const data = await response.json();
-        setOutages(data);
+        console.log(`[DEBUG] Raw response data for endpoint ${endpointId}:`, data);
+        console.log(`[DEBUG] data.data type for endpoint ${endpointId}:`, typeof data.data, Array.isArray(data.data));
+        
+        if (data.success && Array.isArray(data.data)) {
+          setOutages(data.data);
+        } else if (data.success && !data.data) {
+          console.log(`[DEBUG] No outage data for endpoint ${endpointId}, setting empty array`);
+          setOutages([]);
+        } else {
+          console.error(`[DEBUG] Unexpected response format for endpoint ${endpointId}:`, data);
+          setOutages([]);
+        }
         setError(null);
       } catch (err) {
+        console.error(`Failed to fetch outages for endpoint ${endpointId}:`, err);
         setError(err instanceof Error ? err.message : 'An error occurred');
+        setOutages([]); // Ensure outages is always an array
       } finally {
         setLoading(false);
       }

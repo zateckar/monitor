@@ -83,11 +83,21 @@ const HeartbeatVisualization: React.FC<HeartbeatVisualizationProps> = ({
         const actualCount = count || calculatedCount;
         const response = await fetch(`/api/endpoints/${endpointId}/heartbeats?limit=${actualCount}`);
         if (response.ok) {
-          const data = await response.json();
-          setHeartbeats(data);
+          const responseData = await response.json();
+          if (responseData && Array.isArray(responseData.data)) {
+            setHeartbeats(responseData.data);
+          } else if (Array.isArray(responseData)) {
+            setHeartbeats(responseData);
+          } else {
+            console.error('Received incompatible data for heartbeats:', responseData);
+            setHeartbeats([]);
+          }
+        } else {
+          setHeartbeats([]);
         }
       } catch (error) {
         console.error('Error fetching heartbeats:', error);
+        setHeartbeats([]);
       } finally {
         setLoading(false);
       }

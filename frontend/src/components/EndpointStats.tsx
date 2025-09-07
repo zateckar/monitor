@@ -58,17 +58,17 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
       // Fetch main stats
       fetch(`/api/endpoints/${endpoint.id}/stats?range=${timeRange}`)
         .then(res => res.json())
-        .then(data => {
-          setStats(data);
+        .then(response => {
+          setStats(response.data);
           setLoading(false);
         })
         .catch(() => setLoading(false));
 
       // Fetch domain info
-      fetch(`/api/endpoints/${endpoint.id}/domain-info`)
+      fetch(`/api/endpoints/${endpoint.id}/enhanced-domain-info`)
         .then(res => res.ok ? res.json() : null)
-        .then(data => {
-          setDomainInfo(data);
+        .then(response => {
+          setDomainInfo(response.data);
           setLoadingDomain(false);
         })
         .catch(() => setLoadingDomain(false));
@@ -613,6 +613,8 @@ const EndpointStats: React.FC<EndpointStatsProps> = ({ endpoint, timeRange }) =>
         onClose={() => setCertificateModalOpen(false)}
         endpointId={endpoint.id}
         endpointName={endpoint.name}
+        domainInfo={domainInfo}
+        domainLoading={loadingDomain}
       />
     </Box>
   );

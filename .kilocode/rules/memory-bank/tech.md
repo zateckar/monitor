@@ -87,7 +87,7 @@ cd ../backend && bun install
 
 # Start development
 bun start                    # Full application
-bun dev                      # Both frontend and backend with hot reload
+bun dev                      # Both frontend (port 5174) and backend (port 3001) with hot reload 
 bun dev:frontend            # Frontend only (port 5174)
 bun dev:backend             # Backend only (port 3001)
 
@@ -136,10 +136,11 @@ cd frontend && bun run build
 - **Backup Strategy**: File-level backups
 
 ### Schema Highlights
-- **15+ Tables**: Comprehensive data model
+- **19 Tables**: Comprehensive data model including distributed monitoring
 - **Relationships**: Foreign key constraints
 - **Indexing**: Optimized for common queries
 - **Version Tracking**: Schema version management
+- **Distributed Tables**: Instance management, synchronization, and aggregation
 
 ## Security Technologies
 

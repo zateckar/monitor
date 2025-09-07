@@ -36,9 +36,26 @@ const NotificationSettings: React.FC = () => {
   }>({ open: false, message: '', severity: 'success' });
 
   useEffect(() => {
-    fetch('/api/notification-services')
+    fetch('/api/notifications/notification-services')
       .then(res => res.json())
-      .then(setServices);
+      .then(result => {
+        if (result.success) {
+          setServices(Array.isArray(result.data) ? result.data : []);
+        } else {
+          setSnackbar({
+            open: true,
+            message: `Failed to fetch services: ${result.error || 'Unknown error'}`,
+            severity: 'error',
+          });
+        }
+      })
+      .catch(err => {
+        setSnackbar({
+          open: true,
+          message: `Failed to fetch services: ${err instanceof Error ? err.message : 'Network error'}`,
+          severity: 'error',
+        });
+      });
   }, []);
 
   const handleEdit = (service: NotificationService) => {
@@ -46,7 +63,7 @@ const NotificationSettings: React.FC = () => {
   };
 
   const handleDelete = async (id: number) => {
-    await fetch(`/api/notification-services/${id}`, { method: 'DELETE' });
+    await fetch(`/api/notifications/notification-services/${id}`, { method: 'DELETE' });
     setServices(services.filter(s => s.id !== id));
   };
 
@@ -54,7 +71,7 @@ const NotificationSettings: React.FC = () => {
     setTestingServices(prev => new Set(prev).add(id));
     
     try {
-      const response = await fetch(`/api/notification-services/${id}/test`, {
+      const response = await fetch(`/api/notifications/notification-services/${id}/test`, {
         method: 'POST',
       });
       
@@ -63,20 +80,20 @@ const NotificationSettings: React.FC = () => {
       if (result.success) {
         setSnackbar({
           open: true,
-          message: `Test notification sent successfully to "${name}"`,
+          message: `Test notification sent successfully to "${name}"`, 
           severity: 'success'
         });
       } else {
         setSnackbar({
           open: true,
-          message: `Test failed for "${name}": ${result.error}`,
+          message: `Test failed for "${name}": ${result.error}`, 
           severity: 'error'
         });
       }
     } catch (error) {
       setSnackbar({
         open: true,
-        message: `Test failed for "${name}": ${error instanceof Error ? error.message : 'Unknown error'}`,
+        message: `Test failed for "${name}": ${error instanceof Error ? error.message : 'Unknown error'}`, 
         severity: 'error'
       });
     } finally {
@@ -96,22 +113,48 @@ const NotificationSettings: React.FC = () => {
     e.preventDefault();
     if (!editingService) return;
 
-    const url = editingService.id ? `/api/notification-services/${editingService.id}` : '/api/notification-services';
+    const url = editingService.id
+      ? `/api/notifications/notification-services/${editingService.id}`
+      : '/api/notifications/notification-services';
     const method = editingService.id ? 'PUT' : 'POST';
 
-    const res = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editingService),
-    });
-    const savedService = await res.json();
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editingService),
+      });
+      
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ error: 'Invalid JSON response' }));
+        throw new Error(errorData.error || `HTTP error! status: ${res.status}`);
+      }
 
-    if (editingService.id) {
-      setServices(services.map(s => s.id === savedService.id ? savedService : s));
-    } else {
-      setServices([...services, savedService]);
+      const result = await res.json();
+
+      if (result.success) {
+        const savedService = result.data;
+        if (editingService.id) {
+          setServices(services.map(s => (s.id === savedService.id ? savedService : s)));
+        } else {
+          setServices([...services, savedService]);
+        }
+        setEditingService(null);
+        setSnackbar({
+          open: true,
+          message: 'Service saved successfully!',
+          severity: 'success',
+        });
+      } else {
+        throw new Error(result.error || 'Failed to save the service.');
+      }
+    } catch (error) {
+      setSnackbar({
+        open: true,
+        message: `Failed to save service: ${error instanceof Error ? error.message : 'Unknown error'}`, 
+        severity: 'error',
+      });
     }
-    setEditingService(null);
   };
 
   const renderConfigFields = () => {

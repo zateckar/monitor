@@ -1,160 +1,179 @@
-import { Elysia } from 'elysia';
-import { Database } from 'bun:sqlite';
-import { LoggerService } from '../services/logger';
-import { NotificationService } from '../services/notifications';
+import { Elysia, t } from 'elysia';
+import { ServiceContainer } from '../services/service-container';
+import { createSuccessResponse, createErrorResponse } from '../utils/auth-constants';
+import { validateAndSanitizeText, MAX_LENGTHS } from '../utils/validation';
 
-export function createNotificationRoutes(
-  db: Database,
-  logger: LoggerService
-) {
-  const notificationService = new NotificationService(db, logger);
-  return new Elysia({ prefix: '/api' })
-    .get('/notification-services', async () => {
-      const services = db.query('SELECT * FROM notification_services').all() as any[];
-      return services.map(service => ({
-        ...service,
-        config: JSON.parse(service.config)
-      }));
+/**
+ * Creates notification services management routes
+ * @param services Service container with all required dependencies
+ * @returns Elysia route handler for notification services management
+ */
+export function createNotificationRoutes(services: ServiceContainer) {
+  const { db, notificationService, requireRole } = services;
+  return new Elysia({ prefix: '/api/notifications' })
+
+    // === Notification Services Management ===
+
+    /**
+     * Get all notification services
+     * @returns Array of configured notification services
+     */
+    .get('/notification-services', requireRole('user')(async () => {
+      return createSuccessResponse(notificationService.getNotificationServices());
+    }))
+
+    /**
+     * Create a new notification service
+     * @param body - Notification service configuration
+     * @returns Created notification service
+     */
+    .post('/notification-services', requireRole('admin')(async ({ body, set }: any) => {
+      const { name, type, config } = body;
+
+      // Validate and sanitize name
+      const nameValidation = validateAndSanitizeText(name, MAX_LENGTHS.NAME, 'Name');
+      if (!nameValidation.isValid) {
+        set.status = 400;
+        return createErrorResponse(nameValidation.error || 'Invalid name');
+      }
+
+      // Validate and sanitize type
+      const typeValidation = validateAndSanitizeText(type, MAX_LENGTHS.NAME, 'Type');
+      if (!typeValidation.isValid) {
+        set.status = 400;
+        return createErrorResponse(typeValidation.error || 'Invalid type');
+      }
+
+      return createSuccessResponse(notificationService.createNotificationService(
+        nameValidation.sanitizedValue!,
+        typeValidation.sanitizedValue!,
+        config
+      ));
+    }), {
+      body: t.Object({
+        name: t.String({ minLength: 1 }),
+        type: t.String({ minLength: 1 }),
+        config: t.Record(t.String(), t.Unknown())
+      })
     })
-    .post('/notification-services', async ({ body }) => {
-      const { name, type, config } = body as { name: string, type: string, config: object };
-      const result = db.run('INSERT INTO notification_services (name, type, config) VALUES (?, ?, ?)', [name, type, JSON.stringify(config)]);
-      
-      logger.info(`Created notification service "${name}" of type ${type}`, 'NOTIFICATIONS');
-      
-      return { id: result.lastInsertRowid, name, type, config };
-    })
-    .put('/notification-services/:id', async ({ params, body }) => {
+    .put('/notification-services/:id', requireRole('admin')(async ({ params, body, set }: any) => {
       const { id } = params;
-      const { name, type, config } = body as { name: string, type: string, config: object };
-      
-      // Check if service exists
-      const existingService = db.query('SELECT name FROM notification_services WHERE id = ?').get(id) as any;
-      if (!existingService) {
-        return new Response(JSON.stringify({ error: 'Notification service not found' }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json' }
-        });
+      const { name, type, config } = body;
+
+      // Validate and sanitize name if provided
+      let sanitizedName = name;
+      if (name) {
+        const nameValidation = validateAndSanitizeText(name, MAX_LENGTHS.NAME, 'Name');
+        if (!nameValidation.isValid) {
+          set.status = 400;
+          return createErrorResponse(nameValidation.error || 'Invalid name');
+        }
+        sanitizedName = nameValidation.sanitizedValue;
       }
-      
-      db.run('UPDATE notification_services SET name = ?, type = ?, config = ? WHERE id = ?', [name, type, JSON.stringify(config), id]);
-      
-      logger.info(`Updated notification service "${name}" (ID: ${id})`, 'NOTIFICATIONS');
-      
-      return { id, name, type, config };
+
+      // Validate and sanitize type if provided
+      let sanitizedType = type;
+      if (type) {
+        const typeValidation = validateAndSanitizeText(type, MAX_LENGTHS.NAME, 'Type');
+        if (!typeValidation.isValid) {
+          set.status = 400;
+          return createErrorResponse(typeValidation.error || 'Invalid type');
+        }
+        sanitizedType = typeValidation.sanitizedValue;
+      }
+
+      return createSuccessResponse(notificationService.updateNotificationService(parseInt(id), sanitizedName, sanitizedType, config));
+    }), {
+      params: t.Object({
+        id: t.String()
+      }),
+      body: t.Object({
+        name: t.String({ minLength: 1 }),
+        type: t.String({ minLength: 1 }),
+        config: t.Record(t.String(), t.Unknown())
+      })
     })
-    .delete('/notification-services/:id', async ({ params }) => {
+    .delete('/notification-services/:id', requireRole('admin')(async ({ params }: any) => {
       const { id } = params;
-      
-      // Get service name before deletion
-      const service = db.query('SELECT name FROM notification_services WHERE id = ?').get(id) as any;
-      if (!service) {
-        return new Response(JSON.stringify({ error: 'Notification service not found' }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      
-      // Remove associations first
-      db.run('DELETE FROM monitor_notification_services WHERE notification_service_id = ?', [id]);
-      
-      // Then delete the service
-      db.run('DELETE FROM notification_services WHERE id = ?', [id]);
-      
-      logger.info(`Deleted notification service "${service.name}" (ID: ${id})`, 'NOTIFICATIONS');
-      
-      return { id };
+      notificationService.deleteNotificationService(parseInt(id));
+      return createSuccessResponse({ id });
+    }), {
+      params: t.Object({
+        id: t.String()
+      })
     })
-    .get('/endpoints/:id/notification-services', async ({ params }) => {
+
+    /**
+     * Test a notification service
+     * @param params.id - Notification service ID
+     * @returns Test result
+     */
+    .post('/notification-services/:id/test', requireRole('admin')(async ({ params, set }: any) => {
       const { id } = params;
-      const services = db.query(
-        `SELECT ns.* FROM notification_services ns
-         JOIN monitor_notification_services mns ON ns.id = mns.notification_service_id
-         WHERE mns.monitor_id = ?`
-      ).all(id) as any[];
-      return services.map(service => ({
-        ...service,
-        config: JSON.parse(service.config)
-      }));
-    })
-    .post('/endpoints/:id/notification-services', async ({ params, body }) => {
-      const { id } = params;
-      const { serviceId } = body as { serviceId: number };
-      
-      // Check if endpoint exists
-      const endpoint = db.query('SELECT name FROM endpoints WHERE id = ?').get(id) as any;
-      if (!endpoint) {
-        return new Response(JSON.stringify({ error: 'Endpoint not found' }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      
-      // Check if service exists
-      const service = db.query('SELECT name FROM notification_services WHERE id = ?').get(serviceId) as any;
-      if (!service) {
-        return new Response(JSON.stringify({ error: 'Notification service not found' }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      
-      // Check if association already exists
-      const existingAssociation = db.query('SELECT * FROM monitor_notification_services WHERE monitor_id = ? AND notification_service_id = ?').get(id, serviceId) as any;
-      if (existingAssociation) {
-        return new Response(JSON.stringify({ error: 'Association already exists' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      
-      db.run('INSERT INTO monitor_notification_services (monitor_id, notification_service_id) VALUES (?, ?)', [id, serviceId]);
-      
-      logger.info(`Associated notification service "${service.name}" with endpoint "${endpoint.name}"`, 'NOTIFICATIONS');
-      
-      return { monitor_id: id, notification_service_id: serviceId };
-    })
-    .delete('/endpoints/:id/notification-services/:serviceId', async ({ params }) => {
-      const { id, serviceId } = params;
-      
-      // Get names for logging
-      const endpoint = db.query('SELECT name FROM endpoints WHERE id = ?').get(id) as any;
-      const service = db.query('SELECT name FROM notification_services WHERE id = ?').get(serviceId) as any;
-      
-      db.run('DELETE FROM monitor_notification_services WHERE monitor_id = ? AND notification_service_id = ?', [id, serviceId]);
-      
-      if (endpoint && service) {
-        logger.info(`Removed association between notification service "${service.name}" and endpoint "${endpoint.name}"`, 'NOTIFICATIONS');
-      }
-      
-      return { monitor_id: id, notification_service_id: serviceId };
-    })
-    .post('/notification-services/:id/test', async ({ params }) => {
-      const { id } = params;
-      
+
       try {
         const result = await notificationService.testNotificationService(parseInt(id));
-        
-        if (result.success) {
-          return { success: true, message: 'Test notification sent successfully' };
-        } else {
-          return new Response(JSON.stringify({ 
-            success: false, 
-            error: result.error || 'Failed to send test notification' 
-          }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
+        return createSuccessResponse(result);
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        return new Response(JSON.stringify({ 
-          success: false, 
-          error: `Unexpected error: ${errorMessage}` 
-        }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        });
+        set.status = 400;
+        return createErrorResponse(error instanceof Error ? error.message : 'Test failed');
       }
+    }), {
+      params: t.Object({
+        id: t.String()
+      })
+    })
+
+    // === Endpoint-Notification Associations ===
+
+    /**
+     * Get notification services associated with an endpoint
+     * @param params.id - Endpoint ID
+     * @returns Array of associated notification services
+     */
+    .get('/endpoints/:id/notification-services', requireRole('user')(async ({ params }: any) => {
+      const { id } = params;
+      return createSuccessResponse(notificationService.getEndpointNotificationServices(parseInt(id)));
+    }), {
+      params: t.Object({
+        id: t.String()
+      })
+    })
+
+    /**
+     * Associate a notification service with an endpoint
+     * @param params.id - Endpoint ID
+     * @param body.serviceId - Notification service ID
+     * @returns Association confirmation
+     */
+    .post('/endpoints/:id/notification-services', requireRole('admin')(async ({ params, body }: any) => {
+      const { id } = params;
+      const { serviceId } = body;
+      notificationService.addNotificationServiceToEndpoint(parseInt(id), serviceId);
+      return createSuccessResponse({ monitor_id: id, notification_service_id: serviceId });
+    }), {
+      params: t.Object({
+        id: t.String()
+      }),
+      body: t.Object({
+        serviceId: t.Number()
+      })
+    })
+
+    /**
+     * Remove notification service association from an endpoint
+     * @param params.id - Endpoint ID
+     * @param params.serviceId - Notification service ID
+     * @returns Removal confirmation
+     */
+    .delete('/endpoints/:id/notification-services/:serviceId', requireRole('admin')(async ({ params }: any) => {
+      const { id, serviceId } = params;
+      notificationService.removeNotificationServiceFromEndpoint(parseInt(id), parseInt(serviceId));
+      return createSuccessResponse({ monitor_id: id, notification_service_id: serviceId });
+    }), {
+      params: t.Object({
+        id: t.String(),
+        serviceId: t.String()
+      })
     });
 }

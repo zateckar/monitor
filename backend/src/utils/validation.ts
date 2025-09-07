@@ -544,3 +544,40 @@ export function validateEndpoint(data: any): ValidationResult {
 
   return { isValid: true, sanitizedValue: sanitizedData };
 }
+
+/**
+ * Validates and sanitizes query parameters for pagination
+ */
+export function validatePagination(query: any): { page: number; limit: number; offset: number } {
+  const page = Math.max(1, parseInt(query.page) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(query.limit) || 20)); // Max 100 items per page
+  const offset = (page - 1) * limit;
+
+  return { page, limit, offset };
+}
+
+/**
+ * Validates and sanitizes common query parameters
+ */
+export function validateQueryParams(query: any, allowedFields: string[]): ValidationResult {
+  const sanitized: { [key: string]: any } = {};
+
+  for (const [key, value] of Object.entries(query)) {
+    if (!allowedFields.includes(key)) {
+      return { isValid: false, error: `Invalid query parameter: ${key}` };
+    }
+
+    if (typeof value === 'string') {
+      // Basic sanitization for query parameters
+      const sanitizedValue = value.replace(/[<>'"&]/g, '').trim();
+      if (sanitizedValue.length > 100) {
+        return { isValid: false, error: `Query parameter ${key} is too long` };
+      }
+      sanitized[key] = sanitizedValue;
+    } else {
+      sanitized[key] = value;
+    }
+  }
+
+  return { isValid: true, sanitizedValue: sanitized };
+}
