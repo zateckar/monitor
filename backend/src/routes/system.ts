@@ -56,7 +56,7 @@ export function createSystemRoutes(services: ServiceContainer) {
         set.status = 400;
         return createErrorResponse(error instanceof Error ? error.message : 'Failed to set log level');
       }
-    }, {
+    }), {
       body: t.Object({
         level: t.String({ minLength: 1 })
       })
@@ -85,7 +85,7 @@ export function createSystemRoutes(services: ServiceContainer) {
         set.status = 500;
         return createErrorResponse(error instanceof Error ? error.message : 'Database vacuum failed');
       }
-    })
+    }))
 
     // === Distributed Monitoring Configuration ===
 
@@ -386,5 +386,5 @@ export function createSystemRoutes(services: ServiceContainer) {
       }
 
       return createSuccessResponse(results);
-    }))));
+    }));
 }
