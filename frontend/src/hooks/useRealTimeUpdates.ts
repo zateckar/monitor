@@ -41,15 +41,15 @@ export function useRealTimeUpdates<T>(
   const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const mountedRef = useRef(true);
 
-  const fetchData = useCallback(async (isRetry = false) => {
+  const fetchData = useCallback(async (isRetry = false, isBackground = false) => {
     if (!mountedRef.current) return;
 
-    // Removed debug log
+    // Only set loading for non-background fetches
+    if (!isBackground) {
+      setLoading(true);
+    }
 
     try {
-      if (!isRetry) {
-        setLoading(true);
-      }
 
       const result = await fetchFunction();
 
@@ -99,18 +99,18 @@ export function useRealTimeUpdates<T>(
         setLoading(false);
       }
     }
-  }, [fetchFunction, onError, retryCount, retryDelay, status.retryAttempt]);
+  }, [fetchFunction, onError, retryCount, retryDelay]);
 
   const startPolling = useCallback(() => {
     if (!dynamicEnabled || intervalRef.current) return;
 
     // Initial fetch
-    fetchData();
+    fetchData(false, false);
 
     // Set up interval
     intervalRef.current = setInterval(() => {
       if (dynamicEnabled) {
-        fetchData();
+        fetchData(false, true);
       }
     }, interval);
   }, [dynamicEnabled, interval, fetchData]);
